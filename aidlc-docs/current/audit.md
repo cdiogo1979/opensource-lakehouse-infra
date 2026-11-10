@@ -55,3 +55,33 @@ The complete audit history through intent `20261110-platform-spark-session-helpe
 **Email**: cdiogo@gmail.com
 
 ---
+
+## Build and Test — Stack Recreated; Change Requests CR-1 and CR-2
+**Timestamp**: 2026-11-10T23:55:00Z
+**User Input**: (pasted Jupyter output of test_environment.py with a RESTMetricsReporter WARN) / "yes proceed"
+**AI Response**: "Pushed workload 932feee to main and uat (approved). start and start-airflow from the new folder succeeded; four containers (keycloak-db, polaris-db, airflow-postgres, polaris-group-reconciler) still mounted the old folder and were force-recreated with --no-deps (no DAG run active; volumes kept; Compose placeholders only for variables airflow-postgres does not use); all services healthy; no container refers to the old folder. Explained the WARN as Iceberg's best-effort metrics report for a table created in the same write; the write succeeded. CR-1: rest-metrics-reporting-enabled=false in lakehouse_spark for the three catalogs; CR-2: drop the Nessie reference in test_environment.py."
+**Context**: CONSTRUCTION - Build and Test; change requests.
+**User**: cdiogo1979
+**Email**: cdiogo@gmail.com
+
+---
+
+## Build and Test — Complete; Approval Prompt
+**Timestamp**: 2026-11-11T00:10:00Z
+**User Input**: AskUserQuestion: "Push to main and uat (Recommended)" (cb80fc5) / "proceed"
+**AI Response**: "Pushed cb80fc5. Rebuilt both images (CR-1), parity OK. UAT on cb80fc5 8/8 and 13/13; Polaris 0 metrics requests (4 the hour before); Jenkins default_ci main #9 and uat #9 SUCCESS cloning the renamed repository; JupyterHub admits analysts and developers; 0 containers refer to the old folder. Wrote build-and-test-summary.md. Asked for approval."
+**Context**: CONSTRUCTION - Build and Test; approval prompt issued.
+**User**: cdiogo1979
+**Email**: cdiogo@gmail.com
+
+---
+
+## Build and Test — Approved; Deploy Handoff Prompt
+**Timestamp**: 2026-11-11T00:20:00Z
+**User Input**: "done" / "yes proceed"
+**AI Response**: "Checked the user's steps: the Jupyter clone is renamed with the new remote; the local clone still has the old remote and the notebook server runs the previous image (reported to the user; not blocking). Build and Test approved (APG-01). Wrote deploy/pr_request.md, deploy/deploy_instructions.md and deploy/opensource-lakehouse-sample-dp.patch (42de0f3..cb80fc5, 2 commits)."
+**Context**: CONSTRUCTION - Build and Test approved; DEPLOY approval prompt; APG-01/APG-03.
+**User**: cdiogo1979
+**Email**: cdiogo@gmail.com
+
+---

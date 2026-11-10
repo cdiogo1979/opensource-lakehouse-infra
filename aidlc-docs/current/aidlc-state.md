@@ -3,7 +3,7 @@
 ## Project Information
 - Project Type: Brownfield
 - Start Date: 2026-11-10T23:15:00Z
-- Current Stage: CONSTRUCTION - Code Generation (approval pending)
+- Current Stage: DEPLOY - Deploy (approval pending)
 - Intent: Follow the user's renames: the platform workspace folder (opensource-lakehouse-infra-v2 to opensource-lakehouse-infra) and the workload repository (cdiogo1979/opensource-lakehouse to cdiogo1979/opensource-lakehouse-sample-dp): recreate the stack from the new folder, update the product file, docs, tests and the notebooks' Initialization path.
 - Intent ID: 20261110-repository-rename
 - Previous Intent: aidlc-docs/archive/20261110-platform-spark-session-helper (closed)
@@ -25,9 +25,9 @@
 - [x] Workflow Planning — approved on 2026-11-10.
 - [ ] Reverse Engineering, User Stories, Application Design, Units Generation — SKIP.
 - [ ] Functional, NFR, Infrastructure Design — SKIP.
-- [ ] Code Generation — plan approved; 6 steps generated (code-summary.md); awaiting approval.
-- [ ] Build and Test — EXECUTE.
-- [ ] Deploy — EXECUTE (handoff).
+- [x] Code Generation — approved on 2026-11-10.
+- [x] Build and Test — approved on 2026-11-10 (with CR-1, CR-2).
+- [ ] Deploy — handoff written; awaiting approval.
 
 ## Extension Configuration
 | Extension | Enabled | Decided At |
@@ -38,16 +38,16 @@
 | Workflow Conventions | Yes (always enforced) | Workflow start |
 
 ## Current Status
-- Lifecycle Phase: CONSTRUCTION
-- Current Stage: Code Generation (unit rename)
-- Next Stage: Build and Test
-- Status: Awaiting approval of the generated changes.
+- Lifecycle Phase: DEPLOY
+- Current Stage: Deploy
+- Next Stage: Intent closure (artifact compaction)
+- Status: Awaiting approval of the Deploy handoff.
 
 ## Intent Lifecycle
 <!-- intent-lifecycle:start -->
 ```json
 {
-  "current_stage": "CONSTRUCTION - Code Generation",
+  "current_stage": "DEPLOY - Deploy",
   "intent_id": "20261110-repository-rename",
   "name": "Repository Rename",
   "previous_intent": "aidlc-docs/archive/20261110-platform-spark-session-helper",

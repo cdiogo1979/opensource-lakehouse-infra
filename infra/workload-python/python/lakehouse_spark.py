@@ -58,6 +58,9 @@ def catalog_settings(default_catalog: str) -> dict[str, str]:
             prefix + ".io-impl": "org.apache.iceberg.aws.s3.S3FileIO",
             prefix + ".header.Polaris-Realm": "lakehouse",
             prefix + ".header.X-Iceberg-Access-Delegation": "vended-credentials",
+            # Best-effort scan and commit reports to Polaris: unused here, and the report of a
+            # table-creating write arrives before the table exists, which logs a misleading WARN.
+            prefix + ".rest-metrics-reporting-enabled": "false",
         })
     return settings
 

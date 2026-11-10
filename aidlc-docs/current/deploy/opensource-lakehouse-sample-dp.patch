@@ -1,0 +1,159 @@
+From 932feee3ba1c756ca3373e607c1592c23e80c9cf Mon Sep 17 00:00:00 2001
+From: cdiogo1979 <cdiogo@gmail.com>
+Date: Tue, 10 Nov 2026 17:25:51 +0000
+Subject: [PATCH 1/2] Follow the repository rename to
+ opensource-lakehouse-sample-dp
+
+The notebooks' Initialization line, the README, AGENTS.md and the
+structure test use ~/work/opensource-lakehouse-sample-dp and the new
+GitHub URL.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ AGENTS.md                                         | 2 +-
+ README.md                                         | 8 ++++----
+ notebooks/workload/count_sample_rows.py           | 2 +-
+ notebooks/workload/generate_tpch.py               | 2 +-
+ notebooks/workload/test_environment.py            | 2 +-
+ tests/workload_foundation/test_jupyter_scripts.py | 2 +-
+ 6 files changed, 9 insertions(+), 9 deletions(-)
+
+diff --git a/AGENTS.md b/AGENTS.md
+index ca3cbc6..516dfd7 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -18,7 +18,7 @@ This is a lakehouse **data product repository**. [README.md](README.md) is the c
+   - use `notebooks.common.job_runtime.start_spark_job(app_name)` for the config and the Spark session, and declare task arguments for `notebooks.common.cli.parse_task_args(...)` (workflow `args` after `--` in Airflow, widgets or `TASK_ARGS` in Jupyter; values are strings, never templated; check them in the job);
+   - never configure Spark catalogs, tokens or redaction here: the platform's `lakehouse_spark` does that;
+   - structure every notebook in `notebooks/workload/` as: title, `## Initialization`, `## Imports`, the job's own sections, `## Execution` (only the `__main__` block); a test checks it;
+-  - start every notebook in `notebooks/workload/` with the Initialization section (after the title cell): `# !lakehouse-install-requirements ~/work/opensource-lakehouse` and `# %run ../common/jupyter_environment_resolver.py`; use `jupyter_input_widget_helper.py` after `WIDGET_LIST` for task arguments;
++  - start every notebook in `notebooks/workload/` with the Initialization section (after the title cell): `# !lakehouse-install-requirements ~/work/opensource-lakehouse-sample-dp` and `# %run ../common/jupyter_environment_resolver.py`; use `jupyter_input_widget_helper.py` after `WIDGET_LIST` for task arguments;
+   - keep run code under `if __name__ == "__main__":` and stop Spark in `finally:`.
+ - **Configs**:
+   - the loader accepts only `dev`, `uat` and `prod`, requires `storage_path` and `database_name`, and never falls back across environments;
+diff --git a/README.md b/README.md
+index 9081680..6fa022d 100644
+--- a/README.md
++++ b/README.md
+@@ -193,7 +193,7 @@ arguments = parse_task_args(TASK_ARGUMENTS)     # {"date": "2026-11-10", "mode":
+   5. **Execution**: only the `if __name__ == "__main__":` block that runs the job.
+ 
+   CI checks this order.
+-- **Start every notebook with the Initialization section** (see [Working in Jupyter](#working-in-jupyter)): `# !lakehouse-install-requirements ~/work/opensource-lakehouse` and `# %run ../common/jupyter_environment_resolver.py`, right after the title cell. CI checks that every file in `notebooks/workload/` has it.
++- **Start every notebook with the Initialization section** (see [Working in Jupyter](#working-in-jupyter)): `# !lakehouse-install-requirements ~/work/opensource-lakehouse-sample-dp` and `# %run ../common/jupyter_environment_resolver.py`, right after the title cell. CI checks that every file in `notebooks/workload/` has it.
+ - **Stop Spark at the end**: call `spark.stop()` in a `finally:` block. Put the run code under `if __name__ == "__main__":` so tests and notebooks can import the file without starting Spark.
+ - **Packages**: entry points run on the platform's Python 3.10 environment plus this repository's `requirements.txt`; see [Python packages](#python-packages).
+ 
+@@ -244,7 +244,7 @@ Workload code runs on one Python environment, the same in Airflow's Spark contai
+ 
+    ```python
+    # %%
+-   # !lakehouse-install-requirements ~/work/opensource-lakehouse
++   # !lakehouse-install-requirements ~/work/opensource-lakehouse-sample-dp
+ 
+    # %%
+    # %run ../common/jupyter_environment_resolver.py
+@@ -255,7 +255,7 @@ Workload code runs on one Python environment, the same in Airflow's Spark contai
+    - The second cell finds the clone that holds the notebook, selects `dev`, and starts Spark with **your own** identity, so you see and write only what your groups allow (for a developer, read in `prod` and `uat`, write in `dev`). It defines `spark` and `config`.
+ 4. Run the rest of the notebook.
+ 
+-The path `~/work/opensource-lakehouse` assumes the clone is in `~/work`, as in step 2; adjust it if you cloned elsewhere.
++The path `~/work/opensource-lakehouse-sample-dp` assumes the clone is in `~/work`, as in step 2; adjust it if you cloned elsewhere.
+ 
+ **Another environment**: run `%env LAKEHOUSE_ENVIRONMENT=uat` (or `prod`) before the Initialization section. A kernel that already has a session needs a restart to switch.
+ 
+@@ -273,7 +273,7 @@ WIDGET_LIST = ["entity", "scale_factor"]
+ **This repository's extras** (`requirements.txt`): the Initialization section installs them; you can also run the command in a JupyterLab terminal, then restart the kernel:
+ 
+ ```bash
+-cd ~/work/opensource-lakehouse        # your clone
++cd ~/work/opensource-lakehouse-sample-dp        # your clone
+ lakehouse-install-requirements        # or: lakehouse-install-requirements path/to/clone
+ ```
+ 
+diff --git a/notebooks/workload/count_sample_rows.py b/notebooks/workload/count_sample_rows.py
+index 9f2d5cc..6bd8853 100644
+--- a/notebooks/workload/count_sample_rows.py
++++ b/notebooks/workload/count_sample_rows.py
+@@ -16,7 +16,7 @@
+ #    It defines `spark` and `config`.
+ 
+ # %%
+-# !lakehouse-install-requirements ~/work/opensource-lakehouse
++# !lakehouse-install-requirements ~/work/opensource-lakehouse-sample-dp
+ 
+ # %%
+ # %run ../common/jupyter_environment_resolver.py
+diff --git a/notebooks/workload/generate_tpch.py b/notebooks/workload/generate_tpch.py
+index e68fdba..218b23e 100644
+--- a/notebooks/workload/generate_tpch.py
++++ b/notebooks/workload/generate_tpch.py
+@@ -25,7 +25,7 @@
+ #    It defines `spark` and `config`.
+ 
+ # %%
+-# !lakehouse-install-requirements ~/work/opensource-lakehouse
++# !lakehouse-install-requirements ~/work/opensource-lakehouse-sample-dp
+ 
+ # %%
+ # %run ../common/jupyter_environment_resolver.py
+diff --git a/notebooks/workload/test_environment.py b/notebooks/workload/test_environment.py
+index 28d06ad..66c5821 100644
+--- a/notebooks/workload/test_environment.py
++++ b/notebooks/workload/test_environment.py
+@@ -17,7 +17,7 @@
+ #    It defines `spark` and `config`.
+ 
+ # %%
+-# !lakehouse-install-requirements ~/work/opensource-lakehouse
++# !lakehouse-install-requirements ~/work/opensource-lakehouse-sample-dp
+ 
+ # %%
+ # %run ../common/jupyter_environment_resolver.py
+diff --git a/tests/workload_foundation/test_jupyter_scripts.py b/tests/workload_foundation/test_jupyter_scripts.py
+index 50af654..93b08bd 100644
+--- a/tests/workload_foundation/test_jupyter_scripts.py
++++ b/tests/workload_foundation/test_jupyter_scripts.py
+@@ -51,7 +51,7 @@ def test_entry_points_run_the_scripts_from_common():
+     assert not (REPOSITORY_ROOT / "notebooks/workload/jupyter_helper.py").exists()
+ 
+ 
+-INITIALIZATION = ["# !lakehouse-install-requirements ~/work/opensource-lakehouse", "# %run ../common/jupyter_environment_resolver.py"]
++INITIALIZATION = ["# !lakehouse-install-requirements ~/work/opensource-lakehouse-sample-dp", "# %run ../common/jupyter_environment_resolver.py"]
+ 
+ 
+ def test_every_notebook_starts_with_the_initialization_section():
+-- 
+2.55.0
+
+
+From cb80fc51159f0411185c124cdc853bd6ada2a410 Mon Sep 17 00:00:00 2001
+From: cdiogo1979 <cdiogo@gmail.com>
+Date: Tue, 10 Nov 2026 17:50:55 +0000
+Subject: [PATCH 2/2] test_environment: drop the Nessie reference from the
+ commit log message
+
+The stack's catalog is Polaris; replaced snapshot files stay until the
+table's snapshots are expired.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ notebooks/workload/test_environment.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/notebooks/workload/test_environment.py b/notebooks/workload/test_environment.py
+index 66c5821..d883cb7 100644
+--- a/notebooks/workload/test_environment.py
++++ b/notebooks/workload/test_environment.py
+@@ -81,7 +81,7 @@ def write_sample_dataset(spark: Any, config: Mapping[str, Any]) -> None:
+     dataframe = dataframe.withColumn("creation_timestamp", current_timestamp())
+     (dataframe.write.format("iceberg").mode("overwrite").option("path", output_path).saveAsTable(table_identifier))
+     logger.info(
+-        "Committed current contents to Iceberg table '%s' at '%s'; Nessie GC manages " "physical cleanup of files no longer referenced by any branch or tag.",
++        "Committed current contents to Iceberg table '%s' at '%s'; files of replaced snapshots stay until the table's snapshots are expired.",
+         table_identifier,
+         output_path,
+     )
+-- 
+2.55.0
+

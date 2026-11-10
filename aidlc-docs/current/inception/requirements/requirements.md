@@ -13,6 +13,16 @@
 - **FR-5 Clones**: the user's local clone and the scratchpad clone use the new remote URL (`git remote set-url origin https://github.com/cdiogo1979/opensource-lakehouse-sample-dp.git`). The user's Jupyter clone in `~/work` is the user's to rename or re-clone (documented).
 - **FR-6 Knowledge**: current knowledge documents use the new names; the knowledge project folder name and the archives stay as they are.
 
+## Change request CR-1 (2026-11-10, during Build and Test): no REST metrics reports
+- **Finding**: the user ran `test_environment.py` in Jupyter as `joe-developer`; the table was created and written, but Iceberg logged `WARN RESTMetricsReporter: Failed to report metrics … Table does not exist` (the best-effort metrics report of the creating write reached Polaris before the table was known).
+- **Request** (user: "yes proceed"): `lakehouse_spark` sets `rest-metrics-reporting-enabled=false` for the three catalogs (property present in Iceberg 1.10.2's `RESTSessionCatalog`), in Airflow and Jupyter. Polaris then receives no scan or commit metrics; nothing in the stack uses them.
+
+## Change request CR-2 (2026-11-10, during Build and Test): log wording
+- **Request** (same answer): `test_environment.py`'s commit message names "Nessie GC"; this stack uses Polaris. The message drops the Nessie reference.
+
+## Change found during Build and Test (FR-1)
+- `start` and `start-airflow` did not recreate `keycloak-db`, `polaris-db`, `airflow-postgres` and the `polaris-group-reconciler`, which still bind-mounted password files from the old folder. They were force-recreated from the new folder (named data volumes kept), with no DAG run active; all services were healthy afterwards.
+
 ## Non-Functional Requirements
 - **NFR-1 Data kept**: no volume is removed (no `--remove-orphans`, no reset).
 - **NFR-2 Interruption**: the recreation interrupts running notebook servers and DAG runs; it is done only when no run is active.

@@ -101,7 +101,8 @@ def test_p1_every_session_configures_all_three_catalogs_and_holds_no_secret(defa
     for catalog in ls.CATALOGS:
         prefix = f"spark.sql.catalog.{catalog}"
         keys = {key for key in applied if key == prefix or key.startswith(prefix + ".")}
-        assert len(keys) == 8 and applied[prefix + ".warehouse"] == catalog
+        assert len(keys) == 9 and applied[prefix + ".warehouse"] == catalog
+        assert applied[prefix + ".rest-metrics-reporting-enabled"] == "false"
         assert applied[prefix + ".rest.auth.type"] == ls.AUTH_MANAGER
     assert not any("token=" in value.lower() or value.startswith("eyJ") for value in applied.values())
     assert set(applied) - {k for k in applied if k.startswith("spark.sql.catalog.")} == {
