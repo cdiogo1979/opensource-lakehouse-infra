@@ -1,0 +1,5 @@
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+KRB5_CONFIG=/etc/krb5.conf
+KRB5CCNAME=FILE:/run/krb5/ccache
+17 * * * * root /usr/local/bin/starrocks-refresh-ticket

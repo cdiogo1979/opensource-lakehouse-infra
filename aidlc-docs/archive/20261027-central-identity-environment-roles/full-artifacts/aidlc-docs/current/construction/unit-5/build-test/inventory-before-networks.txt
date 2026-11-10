@@ -1,0 +1,10 @@
+NETWORK bridge bridge
+NETWORK host host
+NETWORK iceberg-poc-freeipa-validation-net bridge
+NETWORK iceberg-poc-jupyterhub-ipa-net bridge
+NETWORK iceberg-poc-net bridge
+NETWORK identity_test_net bridge
+NETWORK none null
+NETWORK ranger-test-control-net bridge
+NETWORK ranger-test-db-net bridge
+NETWORK semantica-poc_default bridge

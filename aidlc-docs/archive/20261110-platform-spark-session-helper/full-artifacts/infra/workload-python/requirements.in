@@ -1,0 +1,11 @@
+# The platform's Python packages for workload code, in the Spark runtime and the Jupyter kernel.
+# Top-level pins only: scripts/setup/lock-workload-python.sh resolves them into requirements.lock.
+# PySpark is not listed: both images use the one in /opt/spark.
+PyYAML==6.0.2
+requests==2.32.3
+pandas==2.2.3
+numpy==1.26.4
+pyarrow==17.0.0
+ipykernel==6.29.5
+jupytext==1.16.7
+ipywidgets==8.1.9

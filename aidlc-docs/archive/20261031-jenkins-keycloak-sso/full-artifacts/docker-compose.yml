@@ -1,0 +1,260 @@
+name: lakehouse-local
+
+services:
+  keycloak-db:
+    image: postgres:17.11-alpine3.24@sha256:1bcc18d81671b02906296aad470ec9778a6b71016ce953092024b680bad007b0
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD_FILE: /run/secrets/keycloak_db_password
+    secrets: [keycloak_db_password]
+    volumes:
+      - keycloak-db-data:/var/lib/postgresql/data
+    networks: [core]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U keycloak -d keycloak]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: on-failure:3
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.1@sha256:79c623a22abacf3fe6c00a5fb30f5b7843d717b234033b80995891c06116d244
+    entrypoint: [/opt/lakehouse/keycloak-entrypoint.sh]
+    command: [start]
+    ports:
+      - 127.0.0.1:${KEYCLOAK_HOST_PORT:-8080}:8080
+    volumes:
+      - ./.runtime/container-mounts/keycloak.conf:/opt/keycloak/conf/keycloak.conf:ro
+      - ./.runtime/container-mounts/keycloak-admin-password:/run/secrets/keycloak_admin_password:ro
+      - ./infra/keycloak/keycloak-entrypoint.sh:/opt/lakehouse/keycloak-entrypoint.sh:ro
+    networks:
+      core: {}
+      # RustFS follows the endpoints Keycloak advertises under its canonical
+      # issuer host; this alias makes that host reach Keycloak for RustFS only.
+      rustfs-identity:
+        aliases: [keycloak.localhost]
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, /usr/bin/bash, -c, 'exec 3<>/dev/tcp/127.0.0.1/9000; printf "GET /health/ready HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3; IFS= read -r status <&3; [[ "$$status" == *" 200 "* ]]']
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    restart: on-failure:3
+
+  polaris-db:
+    image: postgres:17.11-alpine3.24@sha256:1bcc18d81671b02906296aad470ec9778a6b71016ce953092024b680bad007b0
+    environment:
+      POSTGRES_DB: polaris
+      POSTGRES_USER: polaris
+      POSTGRES_PASSWORD_FILE: /run/secrets/polaris_db_password
+    secrets: [polaris_db_password]
+    volumes:
+      - polaris-db-data:/var/lib/postgresql/data
+    networks: [core]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U polaris -d polaris]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: on-failure:3
+
+  polaris-schema-init:
+    image: postgres:17.11-alpine3.24@sha256:1bcc18d81671b02906296aad470ec9778a6b71016ce953092024b680bad007b0
+    entrypoint: [/bin/sh, /opt/lakehouse/init-polaris-schema.sh]
+    environment:
+      PGPASSFILE: /run/polaris/pgpass
+    volumes:
+      - ./infra/polaris/init-polaris-schema.sh:/opt/lakehouse/init-polaris-schema.sh:ro
+      - ./.runtime/credentials/polaris-pgpass:/run/polaris/pgpass:ro
+    networks: [core]
+    depends_on:
+      polaris-db:
+        condition: service_healthy
+    profiles: [schema-init]
+    restart: "no"
+
+  polaris:
+    image: apache/polaris:1.8.0@sha256:347615e736cab2c9be0d8c464552ac930be4755302bb0aeb745216bbae99ba5b
+    environment:
+      QUARKUS_CONFIG_LOCATIONS: /deployment/config/application.properties
+    ports:
+      - 127.0.0.1:${POLARIS_HOST_PORT:-8181}:8181
+    volumes:
+      - ./.runtime/container-mounts/polaris-application.properties:/deployment/config/application.properties:ro
+    networks: [core, data-access]
+    depends_on:
+      polaris-db:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD-SHELL, 'curl --fail --silent http://127.0.0.1:8182/q/health/ready >/dev/null']
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    restart: on-failure:3
+
+  polaris-group-reconciler:
+    image: local/lakehouse-polaris-group-reconciler:1.0.0
+    build:
+      context: .
+      dockerfile: infra/polaris/reconciler/Dockerfile
+    environment:
+      RECONCILE_INTERVAL_SECONDS: ${POLARIS_GROUP_RECONCILE_INTERVAL_SECONDS:-300}
+      KEYCLOAK_URL: http://keycloak:8080
+      POLARIS_URL: http://polaris:8181
+    volumes:
+      - ./.runtime/container-mounts/keycloak-admin-password:/run/secrets/keycloak_admin_password:ro
+      - ./.runtime/credentials/polaris-bootstrap-credentials:/run/secrets/polaris_bootstrap_credentials:ro
+    networks: [core]
+    depends_on:
+      keycloak:
+        condition: service_healthy
+      polaris:
+        condition: service_healthy
+    profiles: [scheduled-reconciliation]
+    restart: unless-stopped
+
+  rustfs:
+    image: rustfs/rustfs:1.0.4
+    entrypoint: [/bin/sh, /opt/lakehouse/rustfs-entrypoint.sh]
+    command: [/data]
+    environment:
+      RUSTFS_ACCESS_KEY_FILE: /run/secrets/rustfs_access_key
+      RUSTFS_SECRET_KEY_FILE: /run/secrets/rustfs_secret_key
+      RUSTFS_OBS_LOG_STDOUT_ENABLED: "true"
+      RUSTFS_IDENTITY_OPENID_ENABLE: "on"
+      RUSTFS_IDENTITY_OPENID_CONFIG_URL: http://keycloak.localhost:8080/realms/lakehouse/.well-known/openid-configuration
+      RUSTFS_IDENTITY_OPENID_CLIENT_ID: rustfs
+      RUSTFS_IDENTITY_OPENID_CLAIM_NAME: groups
+      RUSTFS_IDENTITY_OPENID_REDIRECT_URI_DYNAMIC: "on"
+      RUSTFS_IDENTITY_OPENID_DISPLAY_NAME: Keycloak
+      RUSTFS_OUTBOUND_ALLOW_ORIGINS: http://keycloak.localhost:8080
+    ports:
+      - 127.0.0.1:${RUSTFS_S3_HOST_PORT:-9000}:9000
+      - 127.0.0.1:${RUSTFS_CONSOLE_HOST_PORT:-9001}:9001
+    volumes:
+      - ./.runtime/container-mounts/rustfs-access-key:/run/secrets/rustfs_access_key:ro
+      - ./.runtime/container-mounts/rustfs-secret-key:/run/secrets/rustfs_secret_key:ro
+      - ./.runtime/container-mounts/rustfs-oidc-client-secret:/run/secrets/rustfs_oidc_client_secret:ro
+      - ./infra/rustfs/rustfs-entrypoint.sh:/opt/lakehouse/rustfs-entrypoint.sh:ro
+      - rustfs-data:/data
+    networks: [core, data-access, rustfs-identity]
+    healthcheck:
+      test: [CMD, curl, --fail, http://127.0.0.1:9000/health/ready]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: on-failure:3
+
+  jupyterhub:
+    image: local/lakehouse-jupyterhub:6.1.1
+    build:
+      context: ./infra/jupyter/hub
+      dockerfile: Dockerfile
+    environment:
+      DOCKER_NOTEBOOK_IMAGE: local/lakehouse-jupyter-singleuser:6.1.1-spark
+      JUPYTER_USER_NETWORK_NAME: lakehouse-local_jupyter-user
+      DATA_ACCESS_NETWORK_NAME: lakehouse-local_data-access
+      JUPYTERHUB_OAUTH_CALLBACK_URL: http://jupyterhub.localhost:${JUPYTERHUB_HOST_PORT:-8000}/hub/oauth_callback
+      JUPYTERHUB_BROKER_BIND_IP: ${JUPYTERHUB_BROKER_BIND_IP:-172.30.240.2}
+      JUPYTERHUB_BROKER_PORT: ${JUPYTERHUB_BROKER_PORT:-8443}
+      JUPYTERHUB_BROKER_CA_HOST_PATH: ${JUPYTERHUB_BROKER_CA_HOST_PATH:-${PWD}/.runtime/container-mounts/jupyterhub-broker-ca.crt}
+      JUPYTERHUB_SINGLEUSER_CPU_LIMIT: ${JUPYTERHUB_SINGLEUSER_CPU_LIMIT:-1}
+      JUPYTERHUB_SINGLEUSER_MEMORY_LIMIT: ${JUPYTERHUB_SINGLEUSER_MEMORY_LIMIT:-2G}
+    ports:
+      - 127.0.0.1:${JUPYTERHUB_HOST_PORT:-8000}:8000
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - jupyterhub-state:/srv/jupyterhub
+      - ./.runtime/container-mounts/jupyterhub-oidc-client-secret:/run/secrets/jupyterhub_oidc_client_secret:ro
+      - ./.runtime/container-mounts/jupyterhub-auth-state-crypt-key:/run/secrets/jupyterhub_auth_state_crypt_key:ro
+      - ./.runtime/credentials/jupyterhub-broker-server.crt:/run/certs/jupyterhub-broker-server.crt:ro
+      - ./.runtime/credentials/jupyterhub-broker-server-key.pem:/run/certs/jupyterhub-broker-server-key.pem:ro
+      - ./.runtime/container-mounts/jupyterhub-broker-ca.crt:/run/certs/jupyterhub-broker-ca.crt:ro
+    networks:
+      core: {}
+      jupyter-user:
+        ipv4_address: ${JUPYTERHUB_BROKER_BIND_IP:-172.30.240.2}
+    depends_on:
+      keycloak:
+        condition: service_healthy
+      polaris:
+        condition: service_healthy
+      rustfs:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, /etc/jupyterhub/healthcheck.py]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: on-failure:3
+
+  jenkins:
+    image: local/lakehouse-jenkins:2.580.1
+    build:
+      context: ./infra/jenkins
+      dockerfile: Dockerfile
+    environment:
+      CASC_JENKINS_CONFIG: /var/jenkins_casc/jenkins.yaml
+      PLUGINS_FORCE_UPGRADE: "true"
+      JAVA_OPTS: -Djenkins.install.runSetupWizard=false
+      JENKINS_HOST_PORT: ${JENKINS_HOST_PORT:-8090}
+    ports:
+      - 127.0.0.1:${JENKINS_HOST_PORT:-8090}:8080
+    volumes:
+      - jenkins-home:/var/jenkins_home
+      - ./infra/jenkins/casc/jenkins.yaml:/var/jenkins_casc/jenkins.yaml:ro
+      - ./.runtime/container-mounts/jenkins-oidc-client-secret:/run/secrets/jenkins_oidc_client_secret:ro
+      - ./.runtime/container-mounts/jenkins-break-glass-password:/run/secrets/jenkins_break_glass_password:ro
+    networks: [core]
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD-SHELL, 'curl --connect-timeout 2 --max-time 4 -fsS http://127.0.0.1:8080/login >/dev/null']
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
+    restart: on-failure:3
+
+networks:
+  core:
+    name: lakehouse-local_core
+    driver: bridge
+  jupyter-user:
+    name: lakehouse-local_jupyter-user
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${JUPYTER_USER_SUBNET:-172.30.240.0/24}
+  data-access:
+    name: lakehouse-local_data-access
+    driver: bridge
+  rustfs-identity:
+    name: lakehouse-local_rustfs-identity
+    driver: bridge
+    internal: true
+
+volumes:
+  keycloak-db-data:
+    name: lakehouse-local_keycloak-db-data
+  polaris-db-data:
+    name: lakehouse-local_polaris-db-data
+  rustfs-data:
+    name: lakehouse-local_rustfs-data
+  jupyterhub-state:
+    name: lakehouse-local_jupyterhub-state
+  jenkins-home:
+    name: lakehouse-local_jenkins-home
+
+secrets:
+  keycloak_db_password:
+    file: ./.runtime/credentials/keycloak-db-password
+  polaris_db_password:
+    file: ./.runtime/credentials/polaris-db-password

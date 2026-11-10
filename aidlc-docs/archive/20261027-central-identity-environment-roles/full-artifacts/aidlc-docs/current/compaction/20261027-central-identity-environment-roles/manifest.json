@@ -1,0 +1,77 @@
+{
+  "intent_id": "20261027-central-identity-environment-roles",
+  "name": "Central Identity and Environment-Scoped Lakehouse Access",
+  "objective": "Define and implement the local infrastructure path for centralized FreeIPA identities, environment-scoped RustFS/Spark access, JupyterHub authentication, and StarRocks native LDAP-group roles.",
+  "date": "2026-10-28",
+  "scope": "Units 1-5 design, isolated implementation and verification, production integration preparation, and an explicitly waived production cutover. The original project directory remains as a reference. Runtime files were removed from the v2 copy at user request.",
+  "workstreams": [
+    "Unit 1: FreeIPA identity foundation",
+    "Unit 2: RustFS role policy reconciliation",
+    "Unit 3: Spark and RustFS environment authorization",
+    "Unit 4: JupyterHub authentication and per-user access",
+    "Unit 5: StarRocks native LDAP-group roles and production migration planning"
+  ],
+  "verification": {
+    "status": "waived",
+    "user_accepted": true,
+    "details": "The user approved closure with a verification waiver on 2026-10-28. Unit 2 actual FreeIPA membership variants remain unverified under its earlier scoped waiver. Unit 3 Hive metadata DDL authorization, FreeIPA group-revocation timing, Hive metadata-cache behavior, and Airflow ETL integration remain unestablished. Unit 4 expected pre-spawn denial is surfaced as HTTP 500. Unit 5 passed on disposable services only. Production write-service-account identity binding is unresolved; the production FreeIPA/StarRocks LDAP provider and grants were not applied; production identity and RustFS policy migration, MIT KDC cutover, and post-deployment checks remain incomplete. A production FreeIPA container became healthy and its identity bootstrap was invoked, but completion/readback was not confirmed before all Docker containers were stopped. This waiver records incomplete work and is not a production pass or deployment authorization."
+  },
+  "artifact_inventory_complete": true,
+  "summary": {
+    "major_requirements": [
+      "Use FreeIPA as the central identity and group source while preserving existing production data and service credentials during any future cutover.",
+      "Scope developer, analyst, writer, and admin access across production lake, lake-dev, lake-uat, Spark/JupyterHub, and StarRocks.",
+      "Keep direct Spark/RustFS object authorization independent from StarRocks SQL authorization.",
+      "Use StarRocks native LDAP group roles instead of Ranger for the approved target."
+    ],
+    "design_decisions": [
+      "Environment buckets are lake, lake-dev, and lake-uat.",
+      "Developer reads all environments and writes development; analyst reads production only; writer reads/writes all; preserve admin.",
+      "StarRocks native roles map to FreeIPA LDAP groups; a direct writer-role exception is retained for materialized-view refresh.",
+      "The MIT KDC remains authoritative until a separately planned and verified cutover."
+    ],
+    "implementation_decisions": [
+      "Isolated FreeIPA, RustFS, JupyterHub, Spark, and StarRocks tests are retained as evidence in the archive.",
+      "Optional production FreeIPA/StarRocks integration and guarded bootstrap helpers were prepared, but production grants/provider/cutover were not completed.",
+      "The v2 .runtime directory was removed at the user's request; the original project folder remains unchanged as reference."
+    ],
+    "deviations": [
+      "Closure was approved with a verification waiver while production integration and cutover remained incomplete.",
+      "A production FreeIPA identity bootstrap was initiated but its result was not confirmed before containers were stopped."
+    ],
+    "superseded_decisions": [
+      "The earlier Ranger-based Unit 5 design was superseded by StarRocks native RBAC mapped to FreeIPA LDAP groups.",
+      "The earlier user_a/user_b access target was superseded by developer-user and analyst-user; production identity migration remains pending."
+    ]
+  },
+  "canonical_updates": [
+    {
+      "path": "aidlc-docs/knowledge/hive-dremio-rustfs/application-design.md",
+      "content": "# Current Application Design — Open Source Lakehouse Infrastructure\n\n## Purpose and scope\n\nThis repository describes a local Docker Compose lakehouse proof of concept built from Hive Metastore, PostgreSQL, RustFS, Spark, JupyterHub, Airflow, Jenkins, and optional StarRocks. Workload DAGs and notebooks live in the separate `opensource-lakehouse` repository and are delivered to Airflow through the `lakehouse-main` and `lakehouse-uat` DAG bundles. The local stack is not a production availability or security guarantee.\n\n## Components and boundaries\n\n- **Hive Metastore and PostgreSQL** provide the Iceberg catalog metadata service and its backing database.\n- **RustFS** provides S3-compatible object storage. The approved access target uses `lake` for production, `lake-dev` for development, and `lake-uat` for UAT.\n- **Spark** reads and writes Iceberg data through the Hive catalog and RustFS. Direct S3 permissions are the data-plane boundary for Spark; a StarRocks SQL grant does not constrain direct Spark access.\n- **JupyterHub** starts isolated Spark notebook containers. The approved identity direction uses FreeIPA-backed login and per-user authorization; Unit 4 isolated checks passed, while production identity cutover was not completed.\n- **Airflow** schedules workload DAGs from the existing Git bundles and launches Spark work. Existing reported UAT and production DAG executions belong to the separate workload repository.\n- **StarRocks OSS** is the analytical SQL endpoint. It reads Iceberg through Hive Metastore and RustFS. The tested native-RBAC direction maps FreeIPA LDAP groups to StarRocks roles; Ranger is not part of the approved target.\n- **FreeIPA and Kerberos** provide the approved central identity direction. The existing MIT KDC remained authoritative; a production cutover was not completed.\n- **Jenkins** runs the pipeline maintained by `opensource-lakehouse`; this repository does not duplicate the workload source.\n\n## Approved access model\n\n- `developer-user` may read all environments and write only to development.\n- `analyst-user` may read production and may not write to any environment.\n- `write-service-account` may read and write all environments and may manage environment-scoped StarRocks materialized views.\n- Existing `admin` privileges are preserved.\n- StarRocks roles are mapped to FreeIPA groups. A direct StarRocks writer-role exception is needed for materialized-view refresh; group removal alone does not revoke that direct role or terminate existing SQL sessions.\n- Production data and existing writer S3 credentials are to be preserved during any future cutover.\n\n## Verification and deployment status\n\nUnit 1 isolated FreeIPA checks and Unit 3 direct Spark/RustFS role checks passed with documented limits. Unit 2 closed with a scoped waiver for actual FreeIPA membership-variant testing. Unit 4 isolated JupyterHub authentication and authorization checks passed; the expected denied-spawn path surfaces as HTTP 500. Unit 5 native StarRocks LDAP/RBAC checks passed on disposable services.\n\nThe overall intent was closed with a user-approved verification waiver. Production LDAP-to-StarRocks account binding is unresolved; the production group provider and grants were not applied; production identity migration, RustFS policy changes, MIT KDC cutover, and post-deployment verification remain incomplete. A production FreeIPA container became healthy and an identity bootstrap was invoked, but completion was not confirmed before all containers were stopped. No production deployment is authorized by this closure.\n\n## Operations and lifecycle\n\nThe original `opensource-lakehouse-infra` directory is retained as a reference. The `.runtime` directory was removed from `opensource-lakehouse-infra-v2` at the user's request; its local credentials, state, and cached bundle data are therefore absent from this copy. Runtime recreation and production cutover require a separately reviewed operational plan.\n"
+    },
+    {
+      "path": "aidlc-docs/knowledge/hive-dremio-rustfs/functional-design/lakehouse-workload-and-access.md",
+      "content": "# Functional Design — Identity, Lakehouse Access, and Workload Boundaries\n\n## Environment data layout\n\nHive Metastore is the Iceberg catalog. RustFS stores the environment data in `lake` (production), `lake-dev` (development), and `lake-uat` (UAT). StarRocks reads external Iceberg data through the Hive catalog and RustFS. The separate `opensource-lakehouse` repository supplies Airflow DAG bundles and Spark workloads.\n\n## Identity and access rules\n\nThe approved target identity groups and permissions are:\n\n| Identity | RustFS / Spark access | StarRocks access target |\n| --- | --- | --- |\n| `developer-user` | Read all environments; write only `lake-dev` | Read all environment-scoped databases; write only development MV database |\n| `analyst-user` | Read production only; no writes | Read production MV database only |\n| `write-service-account` | Read/write all three environments | Read/write all environments and create/manage scoped materialized views |\n| `admin` | Preserve existing administrator mapping | Preserve existing administrator privileges |\n\nRustFS object policies enforce direct Spark access; Hive metadata visibility alone does not grant object access. StarRocks native roles map to FreeIPA LDAP groups. Because StarRocks MV refresh does not inherit LDAP group-derived roles in the tested topology, `write-service-account` has an approved direct writer-role exception. Offboarding must revoke that role and terminate active SQL sessions as well as remove LDAP membership.\n\nStarRocks materialized views are scoped to `default_catalog.default_lh`, `default_catalog.default_lhdev`, and `default_catalog.default_lhuat`. The LDAP identity spelling `write-service-account` and existing StarRocks account `write_service_account` have not been proven to be the same principal; migration must resolve this before grants are transferred.\n\n## Workload identity boundaries\n\nSpark notebooks use the authenticated per-user identity and scoped object-store credentials in the approved design. Airflow initiates workload jobs using `write-service-account`; Airflow itself does not impersonate arbitrary users. Kerberos, Hive authorization, StarRocks SQL roles, JupyterHub login, and RustFS policies are independent controls. Authorization in one layer does not imply authorization in another.\n\n## Verification status and limits\n\nThe role matrix and direct Spark/RustFS authorization passed in the documented unit tests, and StarRocks LDAP/native-RBAC behavior passed on disposable services. The overall AI-DLC intent closed with a user-approved verification waiver. Production account binding, provider setup, role/grant migration, identity migration, RustFS production-policy updates, MIT KDC cutover, and production authorization probes remain incomplete. Unit 2 FreeIPA membership variants, Unit 3 Hive metadata DDL/cache and Airflow integration, and Unit 4 user-facing denied-spawn behavior also retain the documented limits. These results do not establish production readiness.\n"
+    }
+  ],
+  "artifacts": [
+    "aidlc-docs/current/inception",
+    "aidlc-docs/current/construction",
+    "aidlc-docs/current/deploy",
+    "aidlc-docs/current/compaction/20261027-central-identity-environment-roles/manifest.json",
+    "README.md",
+    ".env.example",
+    "docker-compose.yml",
+    "docker-compose.freeipa-production.yml",
+    "docker-compose.ranger-test.yml",
+    "docker-compose.starrocks-ldap-test.yml",
+    "infra",
+    "scripts"
+  ],
+  "cleanup_paths": [
+    "aidlc-docs/current/inception",
+    "aidlc-docs/current/construction",
+    "aidlc-docs/current/deploy",
+    "aidlc-docs/current/compaction/20261027-central-identity-environment-roles"
+  ]
+}

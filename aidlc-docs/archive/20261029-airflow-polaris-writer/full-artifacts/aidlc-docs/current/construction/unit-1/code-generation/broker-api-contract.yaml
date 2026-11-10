@@ -1,0 +1,238 @@
+openapi: 3.1.0
+info:
+  title: Airflow Writer Token Broker API
+  version: 1.0.0
+  description: >-
+    Private contract for registering an Airflow DAG run, renewing its
+    Keycloak writer access token, and revoking its run-scoped renewal capability.
+    HTTPS is required. Implementations must redact Authorization headers and
+    token-bearing responses from logs and diagnostics.
+servers:
+  - url: https://airflow-token-broker:8443
+    description: Private Compose service DNS; clients must verify the configured CA.
+tags:
+  - name: Run authorization
+security: []
+paths:
+  /v1/runs:
+    post:
+      tags: [Run authorization]
+      operationId: registerRun
+      summary: Register or recover writer authorization for one DAG run
+      description: >-
+        Requires Airflow control authentication. Registration is idempotent for
+        the canonical (dag_id, run_id) pair. An active duplicate returns the same
+        run_handle and renewal_capability with a fresh writer access token. A
+        terminal or expired run cannot be reactivated.
+      security:
+        - AirflowControl: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRunRequest'
+      responses:
+        '200':
+          description: Existing active registration recovered idempotently.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunCredentials'
+        '201':
+          description: New run authorization created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunCredentials'
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/Capacity'}
+        '502': {$ref: '#/components/responses/UpstreamFailure'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /v1/runs/token:
+    post:
+      tags: [Run authorization]
+      operationId: renewRunToken
+      summary: Obtain a fresh writer access token for an active run
+      description: >-
+        Requires the run-scoped capability as a Bearer credential. The
+        capability is accepted only in the Authorization header, never in the
+        request body or URL.
+      security:
+        - RunCapability: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RenewRunRequest'
+      responses:
+        '200':
+          description: Fresh writer access token issued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessTokenResponse'
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/Capacity'}
+        '502': {$ref: '#/components/responses/UpstreamFailure'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /v1/runs/{run_handle}:
+    delete:
+      tags: [Run authorization]
+      operationId: revokeRun
+      summary: Revoke a run's renewal capability
+      description: >-
+        Requires Airflow control authentication. Repeated revocation is
+        idempotent. Revocation prevents further renewal but does not invalidate
+        a self-contained access token already issued by Keycloak.
+      security:
+        - AirflowControl: []
+      parameters:
+        - $ref: '#/components/parameters/RunHandle'
+      responses:
+        '204': {description: Run revoked or already absent; repeated calls are idempotent.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+components:
+  securitySchemes:
+    AirflowControl:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: Separate high-entropy control secret; only broker and Airflow task execution receive it.
+    RunCapability:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: High-entropy capability scoped to one registered Airflow DAG run.
+  parameters:
+    RunHandle:
+      name: run_handle
+      in: path
+      required: true
+      description: Random opaque broker handle; contains no DAG identifier or secret.
+      schema:
+        type: string
+        minLength: 22
+        maxLength: 128
+        pattern: '^[A-Za-z0-9_-]+$'
+  schemas:
+    RegisterRunRequest:
+      type: object
+      additionalProperties: false
+      required: [dag_id, run_id]
+      properties:
+        dag_id:
+          type: string
+          minLength: 1
+          maxLength: 250
+          pattern: '^[A-Za-z0-9_.-]+$'
+        run_id:
+          type: string
+          minLength: 1
+          maxLength: 512
+          pattern: '^[A-Za-z0-9_.:+-]+$'
+    RenewRunRequest:
+      type: object
+      additionalProperties: false
+      required: [run_handle]
+      properties:
+        run_handle:
+          type: string
+          minLength: 22
+          maxLength: 128
+          pattern: '^[A-Za-z0-9_-]+$'
+    RunCredentials:
+      type: object
+      additionalProperties: false
+      required: [run_handle, renewal_capability, token_type, access_token, expires_at]
+      properties:
+        run_handle:
+          type: string
+          minLength: 22
+          maxLength: 128
+          pattern: '^[A-Za-z0-9_-]+$'
+        renewal_capability:
+          type: string
+          minLength: 43
+          maxLength: 256
+          description: Secret; return only to authenticated registration caller and never log or persist.
+        token_type: {type: string, const: Bearer}
+        access_token:
+          type: string
+          minLength: 1
+          description: Secret Keycloak writer JWT; redact from logs and diagnostics.
+        expires_at:
+          type: string
+          format: date-time
+          description: Absolute UTC expiry of access_token.
+    AccessTokenResponse:
+      type: object
+      additionalProperties: false
+      required: [token_type, access_token, expires_at]
+      properties:
+        token_type: {type: string, const: Bearer}
+        access_token:
+          type: string
+          minLength: 1
+          description: Secret Keycloak writer JWT; redact from logs and diagnostics.
+        expires_at:
+          type: string
+          format: date-time
+    Problem:
+      type: object
+      description: RFC 9457 problem details with a stable, allow-listed code.
+      required: [type, title, status, code]
+      properties:
+        type: {type: string, format: uri-reference}
+        title: {type: string}
+        status: {type: integer}
+        detail:
+          type: string
+          description: Sanitized; no secrets, raw identifiers, JWT claims, or upstream response text.
+        instance: {type: string, format: uri-reference}
+        code:
+          type: string
+          enum: [invalid_request, invalid_control_credential, invalid_run_capability, run_not_found, run_terminal, capacity_exhausted, identity_provider_failure, service_unavailable]
+  responses:
+    BadRequest:
+      description: Request shape or identifier is invalid.
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    Unauthorized:
+      description: Required control credential or run capability is missing or invalid.
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    NotFound:
+      description: Run handle is unknown; response does not disclose registration history.
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    Conflict:
+      description: Run registration is terminal or revoked and cannot be reactivated.
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    Capacity:
+      description: Bounded in-memory registration capacity is exhausted.
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    UpstreamFailure:
+      description: Keycloak token issuance failed or returned an invalid response.
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    Unavailable:
+      description: Broker or required dependency is unavailable.
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}

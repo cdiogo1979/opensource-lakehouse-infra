@@ -1,0 +1,4 @@
+#!/bin/sh
+# Validate a product repository's workflows/*.json and dags/ stub with the platform's
+# rules (infra/airflow/lakehouse_dags, mounted read-only). Usage: lakehouse-validate-workflows [ROOT]
+PYTHONPATH=/opt/lakehouse/python exec python3 -m lakehouse_dags.validate "$@"

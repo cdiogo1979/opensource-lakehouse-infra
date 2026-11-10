@@ -1,0 +1,79 @@
+{
+  "intent_id": "20261026-integrate-airflow-jenkins-spark",
+  "name": "Integrate Airflow, Jenkins, and per-run Spark workloads",
+  "objective": "Integrate the existing Airflow 3 Git DAG Bundle workflow and Jenkins validation pipeline into the Hive/RustFS lakehouse, with ephemeral Spark job containers using the write_service_account identity.",
+  "date": "2026-10-27",
+  "scope": "Integrated Airflow 3.3.2 Git DAG Bundles and per-run Spark driver/worker execution into the local Hive/RustFS/StarRocks Compose PoC. Preserved the main and UAT bundle configuration and configured Spark jobs to use the writer identity. Jenkins hosts the pipeline maintained in opensource-lakehouse; no separate Jenkins job or workload-source copy is maintained in this repository. Deployment was not performed.",
+  "workstreams": [
+    "Airflow control plane and Git DAG Bundles",
+    "Ephemeral Spark workload execution as write_service_account",
+    "Jenkins-hosted CI for opensource-lakehouse (no separate hive-dremio-rustfs job)",
+    "Deployment handoff and verification waiver"
+  ],
+  "verification": {
+    "status": "waived",
+    "user_accepted": true,
+    "details": "The user accepted a verification waiver and directed intent finalization. Jenkins main build #10 passed code-quality stages and 48 unit tests. The latest recorded UAT Jenkins build #2 failed because it checked out an older pipeline revision without pytest; no post-recreation UAT Jenkins rerun was recorded. User-reported production and UAT Airflow DAG runs succeeded. Fresh-home Jenkins plugin reproducibility and Unit 1-3 Spark worker renewal/recovery, per-run cleanup/decommission, and concurrency checks remain unverified. This waiver is not a pass."
+  },
+  "artifact_inventory_complete": true,
+  "summary": {
+    "major_requirements": [
+      "Retain the two existing Airflow Git DAG Bundles: lakehouse-main tracking main and lakehouse-uat tracking uat, including the repository, connection ID, refresh interval, and sparse directory list.",
+      "Run Spark ETL in ephemeral per-run containers as write_service_account using the existing Kerberos and RustFS credential material.",
+      "Use the Jenkins service for the Airflow/Spark pipeline maintained in opensource-lakehouse; do not create a separate job or duplicate workload source in hive-dremio-rustfs."
+    ],
+    "design_decisions": [
+      "Airflow and Jenkins use dedicated persistent metadata/home volumes and dedicated secret files; Hive, RustFS, KDC, JupyterHub, and StarRocks data volumes are preserved.",
+      "Airflow retains exactly two Git Bundles, lakehouse-main and lakehouse-uat; UAT and production workload configurations remain gated as designed.",
+      "Each workload run receives an ephemeral Spark driver/worker pair with shared Spark Standalone scheduling and the approved per-run cleanup contract.",
+      "The connected Jenkins pipeline is sourced from opensource-lakehouse/Jenkinsfile; hive-dremio-rustfs has no separate Jenkins pipeline."
+    ],
+    "implementation_decisions": [
+      "Use local Airflow and Jenkins images with pinned base images and configured runtime tooling.",
+      "Provision Airflow secret files through the non-rotating helper and keep secret values out of logs and repository configuration.",
+      "The root configs, dags, and notebooks copies were removed; Airflow continues to fetch those sparse directories from opensource-lakehouse into runtime-managed Bundle storage.",
+      "No deployment or opensource-lakehouse workload-source edit was part of this intent."
+    ],
+    "deviations": [
+      "Build and Test is partial and closed under the accepted verification waiver.",
+      "The latest recorded Jenkins UAT build failed on an older pipeline revision; the user-reported UAT Airflow DAG success is recorded separately.",
+      "Unit 1-3 Spark renewal/recovery, paired cleanup/decommission, and concurrency behavior remain unverified.",
+      "Deployment was not performed or authorized."
+    ],
+    "superseded_decisions": [
+      "Earlier project documentation deferred Airflow and Jenkins orchestration; this intent integrates Airflow Bundles and Jenkins hosting for the external workload repository. See archived artifacts.",
+      "An earlier dev-only Bundle proposal was superseded by retaining the sibling project main and uat Bundle configuration.",
+      "A project-local Jenkins validation pipeline and root copies of the workload directories were generated during this intent, then removed after the user confirmed the only workload source is opensource-lakehouse and no separate Jenkins job is wanted."
+    ]
+  },
+  "canonical_updates": [
+    {
+      "path": "aidlc-docs/knowledge/hive-dremio-rustfs/application-design.md",
+      "content": "# Current Application Design — Hive, StarRocks, RustFS, Kerberos, Spark, Airflow, Jenkins, and JupyterHub\n\n## Purpose and scope\n\nThis repository is a local Docker Compose lakehouse proof of concept. Hive Metastore 3.1.3 is the Iceberg catalog backed by PostgreSQL; RustFS stores Iceberg objects; Spark runs ETL and notebooks; StarRocks OSS is an opt-in analytical SQL endpoint; JupyterHub provides isolated Spark notebooks; and Airflow orchestrates Git DAG Bundles and ephemeral Spark jobs. Jenkins hosts the workload CI pipeline maintained in the separate `opensource-lakehouse` repository. This repository does not define a separate Jenkins job or duplicate the workload source. This is not a production deployment design.\n\n## Components and boundaries\n\n- **Hive Metastore 3.1.3** stores catalog metadata in PostgreSQL and describes Iceberg data in RustFS.\n- **Kerberos KDC** provides service and workload principals/keytabs in the local `LAKEHOUSE.LOCAL` realm. Service principals and workload identities are separate.\n- **RustFS** stores Iceberg objects in the `lake` bucket. Spark ETL uses the `write_service_account` identity with bucket-wide writer policy; other service identities are distinct.\n- **Spark** uses Hive as its Iceberg catalog and RustFS as object storage. The long-lived service supports existing clients; Airflow runs use an ephemeral driver/worker pair and the writer identity. Supervisor renewal/recovery and per-run cleanup behavior have not all been verified.\n- **Airflow** uses dedicated PostgreSQL metadata storage and two Git DAG Bundles: `lakehouse-main` tracks `main`, and `lakehouse-uat` tracks `uat`, preserving the repository, connection ID, refresh interval, and sparse paths `dags`, `configs`, and `notebooks`. Workload source is maintained only in `opensource-lakehouse`; Bundle checkouts live in `.runtime/airflow-dag-bundles`. The user reports successful production and UAT DAG executions.\n- **Jenkins** runs the pipeline supplied by the connected workload repository. The `opensource-lakehouse` main pipeline passed its latest recorded build with 48 unit tests; the latest recorded UAT pipeline build failed on an older revision without pytest installed, and a post-recreation UAT pipeline rerun was not recorded. Jenkins plugin installation in a fresh home and selected runtime controls remain unverified.\n- **StarRocks FE/BE** is an opt-in analytical SQL engine. Its `iceberg` external catalog reads Iceberg metadata through HMS and objects through RustFS. FE metadata and BE storage persist in separate paired volumes.\n- **JupyterHub** starts isolated Spark single-user containers with configured Kerberos and RustFS credentials. DummyAuthenticator usernames are development labels, not verified identities.\n\n## Security and access boundaries\n\nKerberos principals, PostgreSQL roles, RustFS identities, StarRocks SQL users, and JupyterHub usernames are separate authorization layers. Spark ETL uses the writer Kerberos principal and RustFS credentials. Airflow and Jenkins do not receive writer credential contents; Docker Engine mounts runtime files into Spark job containers. StarRocks uses its own service identity for HMS/RustFS and native SQL grants for the tested access matrix. Do not infer user delegation across these systems. Runtime secret files reside under ignored `.runtime/credentials/` with restricted permissions and must not be committed or logged.\n\n## Operations and lifecycle\n\nUse repository start/stop scripts and preserve named volumes and protected credential files during normal operation. Airflow metadata, Jenkins state, Hive metadata, RustFS objects, KDC state, StarRocks data, and notebook workspaces have separate persistence boundaries. Bundle revisions are retained; automatic pruning remains disabled until active-run reference safety is implemented. Consult the README and archived intent artifacts for operational details.\n\n## Verification limits\n\nThe intent closed with a user-approved verification waiver. The user does not want a separate Jenkins job for this repository. The latest recorded main build passed 48 unit tests and code-quality stages; the latest UAT build failed on an older pipeline revision without pytest, with no later UAT Jenkins rerun recorded. User-reported UAT and production Airflow DAG executions succeeded. Fresh-home Jenkins plugin reproducibility and Unit 1-3 Spark worker renewal/recovery, per-run cleanup/decommission, and concurrency behavior remain unverified. The waiver is not a pass. This local PoC is not a production availability, security, backup, or recovery guarantee.\n"
+    },
+    {
+      "path": "aidlc-docs/knowledge/hive-dremio-rustfs/functional-design/lakehouse-workload-and-access.md",
+      "content": "# Functional Design — Lakehouse Workload and Access\n\n## Catalog and sample workload\n\nHive Metastore is the Iceberg catalog for tables stored in the RustFS `lake` warehouse. Spark uses `write-service-account` for ETL table creation and writes. StarRocks exposes Iceberg tables through its `iceberg` external catalog. Airflow schedules workloads from two Git DAG Bundles: `lakehouse-main` (production/main) and `lakehouse-uat` (UAT), preserving the existing repository, Git connection, refresh interval, and sparse paths (`dags`, `configs`, `notebooks`). The canonical workload source is the separate `opensource-lakehouse` repository. The user reports successful UAT and production DAG executions.\n\nAirflow launches Spark work in an ephemeral per-run driver/worker topology. Spark workloads use the writer Kerberos principal and RustFS credentials, mounted into the job containers by Docker Engine. The Airflow control plane does not need credential contents. Development sample workloads create or validate configured Hive databases and tables; production/UAT execution remains governed by environment configuration and release procedures.\n\n## Identity and authorization layers\n\n- StarRocks SQL identities are distinct from Kerberos principals, RustFS identities, and JupyterHub usernames. The tested SQL policy is: `user_a` reads databaseA and is denied databaseB; `user_b` reads both; `write_service_account` reads and performs DML on existing tables; `admin` has StarRocks administration.\n- Spark ETL authenticates with the writer Kerberos principal and RustFS credentials. Airflow triggers work but does not impersonate arbitrary users.\n- StarRocks uses dedicated service identities to access HMS and RustFS; native StarRocks grants enforce the SQL access matrix. Do not assume per-query end-user delegation to HMS or RustFS.\n- Notebook Spark sessions use configured credentials. DummyAuthenticator usernames are development labels, not verified identities.\n- Kerberos, Hive authorization, StarRocks SQL grants, and RustFS policies are separate controls; a grant in one layer does not automatically authorize another.\n\n## CI workflow\n\nThe Jenkins Compose service hosts the workload repository's pipeline, defined in `opensource-lakehouse/Jenkinsfile`. This repository has no separate Jenkins job, Jenkinsfile, or copy of the workload source. The latest recorded main pipeline passed code-quality stages and 48 unit tests. The latest recorded UAT pipeline build failed because it checked out an older revision without pytest; no post-recreation UAT Jenkins rerun was recorded. The user separately reports successful production and UAT Airflow DAG runs.\n\n## Data preservation and failure behavior\n\nDo not reset Hive metadata, RustFS objects, KDC state, StarRocks named volumes, Airflow metadata, Jenkins home, credentials, or Jupyter workspaces during routine operation. Existing table conflicts stop ETL rather than overwrite data. A failed Spark run is reported as failed. Bundle revisions are kept because safe coordination with active runs is not implemented. Per-run Spark cleanup and worker recovery behavior have not been fully verified.\n\n## Local development limits\n\nThis stack is a local proof of concept. Build and Test closed with a user-approved verification waiver. Fresh-home Jenkins plugin reproducibility and Unit 1-3 Spark worker renewal/recovery, cleanup/decommission, and concurrency checks remain unverified. The UAT Jenkins pipeline also needs a successful run of the recreated branch before it can be marked passing. User-reported production and UAT DAG success is evidence for those DAG runs only. Do not treat this design as a production reliability or security guarantee.\n"
+    }
+  ],
+  "artifacts": [
+    "aidlc-docs/current/inception",
+    "aidlc-docs/current/construction",
+    "aidlc-docs/current/deploy",
+    "aidlc-docs/current/compaction/20261026-integrate-airflow-jenkins-spark/manifest.json",
+    "README.md",
+    "docker-compose.yml",
+    ".env.example",
+    "infra/airflow",
+    "infra/jenkins",
+    "infra/spark",
+    "scripts/provision-airflow-secrets.sh",
+    "scripts/verify-airflow-environment-dags.sh"
+  ],
+  "cleanup_paths": [
+    "aidlc-docs/current/inception",
+    "aidlc-docs/current/construction",
+    "aidlc-docs/current/deploy",
+    "aidlc-docs/current/compaction"
+  ]
+}

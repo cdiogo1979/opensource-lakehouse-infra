@@ -1,0 +1,26 @@
+{
+  "administrator": {
+    "role": "admin",
+    "mit_principal": "admin@LAKEHOUSE.LOCAL",
+    "keytab": "admin.keytab",
+    "rustfs_access": "rustfs-admin-access-key",
+    "rustfs_secret": "rustfs-admin-secret-key",
+    "volume": "iceberg-poc-jupyter-admin-work"
+  },
+  "developer-user": {
+    "role": "developer",
+    "mit_principal": "developer-user@LAKEHOUSE.LOCAL",
+    "keytab": "developer-user.keytab",
+    "rustfs_access": "rustfs-developer-access-key",
+    "rustfs_secret": "rustfs-developer-secret-key",
+    "volume": "iceberg-poc-jupyter-developer-user-work"
+  },
+  "analyst-user": {
+    "role": "analyst",
+    "mit_principal": "analyst-user@LAKEHOUSE.LOCAL",
+    "keytab": "analyst-user.keytab",
+    "rustfs_access": "rustfs-analyst-access-key",
+    "rustfs_secret": "rustfs-analyst-secret-key",
+    "volume": "iceberg-poc-jupyter-analyst-user-work"
+  }
+}

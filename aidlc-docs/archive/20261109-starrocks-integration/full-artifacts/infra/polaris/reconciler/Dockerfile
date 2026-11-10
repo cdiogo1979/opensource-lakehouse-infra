@@ -1,0 +1,13 @@
+FROM python:3.12-alpine@sha256:1b668429b3511ab407d8e00648891631b0b1a4d7e15e3ca70f38ab5b91ad4ab4
+
+# MySQL-protocol client for the scheduled StarRocks user reconcile.
+RUN apk add --no-cache mariadb-client=11.8.9-r0
+
+WORKDIR /opt/lakehouse
+COPY infra/polaris/reconcile-keycloak-groups.py ./reconcile-keycloak-groups.py
+COPY infra/starrocks/starrocks_common.py ./starrocks/starrocks_common.py
+COPY infra/starrocks/reconcile-starrocks-users.py ./starrocks/reconcile-starrocks-users.py
+COPY infra/polaris/reconciler/run.sh ./run.sh
+RUN chmod 0755 ./run.sh
+
+ENTRYPOINT ["/opt/lakehouse/run.sh"]

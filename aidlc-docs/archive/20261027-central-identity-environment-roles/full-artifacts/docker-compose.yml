@@ -1,0 +1,853 @@
+x-airflow-secrets: &airflow-secrets
+  - airflow-postgres-password
+  - airflow-fernet-key
+  - airflow-api-secret-key
+  - airflow-jwt-secret
+x-airflow-bundle-config-list: &airflow-bundle-config-list >-
+  [{"name":"lakehouse-main","classpath":"airflow.providers.git.bundles.git.GitDagBundle","kwargs":{"repo_url":"https://github.com/cdiogo1979/opensource-lakehouse.git","git_conn_id":"lakehouse_git","tracking_ref":"main","refresh_interval":300,"sparse_dirs":["dags","configs","notebooks"]}},
+  {"name":"lakehouse-uat","classpath":"airflow.providers.git.bundles.git.GitDagBundle","kwargs":{"repo_url":"https://github.com/cdiogo1979/opensource-lakehouse.git","git_conn_id":"lakehouse_git","tracking_ref":"uat","refresh_interval":300,"sparse_dirs":["dags","configs","notebooks"]}}]
+
+services:
+  freeipa-validation:
+    profiles: [freeipa-validation]
+    build:
+      context: ./infra/freeipa
+      dockerfile: Dockerfile
+    image: local/freeipa-server:4.13.4-almalinux-9-nssfix
+    container_name: iceberg-poc-freeipa-validation
+    hostname: ${FREEIPA_HOSTNAME:-ipa.lakehouse.local}
+    cgroup: host
+    environment:
+      KERBEROS_REALM: ${KERBEROS_REALM:-LAKEHOUSE.LOCAL}
+      FREEIPA_HOSTNAME: ${FREEIPA_HOSTNAME:-ipa.lakehouse.local}
+      HIVE_SERVICE_FQDN: ${HIVE_SERVICE_FQDN:-hive-metastore.lakehouse.local}
+      IPA_SERVER_IP: ${FREEIPA_VALIDATION_IP:-172.30.250.10}
+    secrets:
+      - source: freeipa-server-install-options
+        target: /run/secrets/freeipa-server-install-options
+        mode: 0400
+    volumes:
+      - freeipa-validation-data:/data
+      - ./infra/freeipa/entrypoint.sh:/usr/local/sbin/freeipa-entrypoint:ro
+      - ./infra/freeipa/bootstrap-identities.sh:/usr/local/sbin/freeipa-bootstrap-identities:ro
+      - ./infra/freeipa/set-role-membership.sh:/usr/local/sbin/freeipa-set-role-membership:ro
+      - ./infra/freeipa/create-rustfs-reader.sh:/usr/local/sbin/freeipa-create-rustfs-reader:ro
+      - ./infra/freeipa/readiness.sh:/usr/local/sbin/freeipa-readiness:ro
+      - ./infra/freeipa/patch-httpd-redirects.py:/usr/local/sbin/patch-httpd-redirects.py:ro
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    entrypoint: ["/bin/bash", "/usr/local/sbin/freeipa-entrypoint"]
+    ports:
+      - "127.0.0.1:8443:443"
+    networks:
+      freeipa_validation_net:
+        ipv4_address: ${FREEIPA_VALIDATION_IP:-172.30.250.10}
+        aliases:
+          - ${FREEIPA_HOSTNAME:-ipa.lakehouse.local}
+      jupyterhub_ipa_net:
+        aliases:
+          - ${FREEIPA_HOSTNAME:-ipa.lakehouse.local}
+    healthcheck:
+      test: ["CMD", "/usr/local/sbin/freeipa-readiness"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 10m
+
+  kdc:
+    build:
+      context: ./infra/kerberos
+      dockerfile: Dockerfile
+    container_name: iceberg-poc-kdc
+    hostname: kdc
+    environment:
+      KERBEROS_REALM: ${KERBEROS_REALM:-LAKEHOUSE.LOCAL}
+      KDC_MASTER_PASSWORD_FILE: /run/secrets/kdc-master-password
+    secrets:
+      - kdc-master-password
+    volumes:
+      - kerberos-kdc-data:/var/lib/krb5kdc
+      - ./.runtime/credentials/keytabs:/keytabs
+    networks:
+      - iceberg_net
+    healthcheck:
+      test: ["CMD", "/usr/local/sbin/kdc-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  identity-provisioner:
+    profiles: [identity-provisioning]
+    build:
+      context: ./infra/identity-provisioner
+      dockerfile: Dockerfile
+    container_name: iceberg-poc-identity-provisioner
+    depends_on:
+      kdc:
+        condition: service_healthy
+      hive-metastore:
+        condition: service_healthy
+      create-bucket:
+        condition: service_completed_successfully
+    environment:
+      KERBEROS_REALM: ${KERBEROS_REALM:-LAKEHOUSE.LOCAL}
+      ROTATE_RUSTFS_WRITER_SECRET: ${ROTATE_RUSTFS_WRITER_SECRET:-false}
+    secrets:
+      - metastore-db-password
+      - postgres-admin-password
+      - rustfs-root-access-key
+      - rustfs-root-secret-key
+      - rustfs-admin-access-key
+      - rustfs-admin-secret-key
+      - rustfs-writer-access-key
+      - rustfs-writer-secret-key
+      - rustfs-hive-access-key
+      - rustfs-hive-secret-key
+      - rustfs-user-a-access-key
+      - rustfs-user-a-secret-key
+      - rustfs-user-b-access-key
+      - rustfs-user-b-secret-key
+      - rustfs-developer-access-key
+      - rustfs-analyst-access-key
+      - rustfs-developer-secret-key
+      - rustfs-analyst-secret-key
+      - rustfs-starrocks-secret-key
+    volumes:
+      - ./.runtime/credentials/keytabs/kadmin-provisioner.keytab:/run/credentials/kadmin-provisioner.keytab:ro
+      - ./.runtime/credentials/keytabs:/run/credentials/keytabs
+      - ./.runtime/identity-provisioning:/run/identity-status
+      - ./infra/kerberos/krb5.conf:/etc/krb5.conf:ro
+    networks:
+      - iceberg_net
+
+  identity-reconciler:
+    profiles: [identity-provisioning]
+    build:
+      context: ./infra/identity-provisioner
+      dockerfile: Dockerfile
+    image: local/identity-provisioner:bookworm-snapshot
+    entrypoint: ["/usr/bin/python3", "/usr/local/bin/reconcile-rustfs-roles.py"]
+    environment:
+      KERBEROS_REALM: ${KERBEROS_REALM:-LAKEHOUSE.LOCAL}
+      FREEIPA_LDAP_URI: ldaps://${FREEIPA_HOSTNAME:-ipa.lakehouse.local}:636
+      FREEIPA_CA_FILE: /run/freeipa/ca.crt
+      RUSTFS_ENDPOINT: ${RUSTFS_ROLE_TEST_ENDPOINT:-http://rustfs-iam-test:9000}
+      RUSTFS_ROLE_POLICY_FILE: /etc/lakehouse/rustfs-role-policy.json
+      IDENTITY_RUNTIME_DIR: /run/identity-status
+    secrets:
+      - source: rustfs-role-test-root-access-key
+        target: rustfs-root-access-key
+      - source: rustfs-role-test-root-secret-key
+        target: rustfs-root-secret-key
+      - source: rustfs-role-test-writer-secret-key
+        target: rustfs-writer-secret-key
+      - source: rustfs-role-test-developer-secret-key
+        target: rustfs-developer-secret-key
+      - source: rustfs-role-test-analyst-secret-key
+        target: rustfs-analyst-secret-key
+      - source: rustfs-role-test-freeipa-reader-password
+        target: freeipa-rustfs-reader-password
+    volumes:
+      - ./.runtime/freeipa/ca.crt:/run/freeipa/ca.crt:ro
+      - ./.runtime/identity-provisioning/test-status:/run/identity-status
+      - ./infra/identity-provisioner/rustfs-role-policy.json:/etc/lakehouse/rustfs-role-policy.json:ro
+    networks:
+      - identity_test_net
+      - freeipa_validation_net
+
+  metastore-db:
+    image: postgres:16.14@sha256:be01cf82fc7dbba824acf0a82e150b4b360f3ff93c6631d7844af431e841a95c
+    container_name: iceberg-poc-metastore-db
+    environment:
+      POSTGRES_DB: metastore
+      POSTGRES_USER: hive
+      POSTGRES_PASSWORD_FILE: /run/secrets/metastore-db-password
+    secrets:
+      - metastore-db-password
+    volumes:
+      - metastore-db-data:/var/lib/postgresql/data
+    networks:
+      - iceberg_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hive -d metastore"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  hive-schema-init:
+    image: local/hive-metastore:3.1.3-native-pgjdbc42.7.14
+    build:
+      context: ./infra/hive
+      dockerfile: Dockerfile
+    container_name: iceberg-poc-hive-schema-init
+    depends_on:
+      metastore-db:
+        condition: service_healthy
+    environment:
+      HIVE_CUSTOM_CONF_DIR: /hive_custom_conf
+      KRB5_CONFIG: /etc/krb5.conf
+      METASTORE_DB_HOST: metastore-db
+      METASTORE_DB_NAME: metastore
+      METASTORE_DB_USER: hive
+    entrypoint: ["/bin/bash", "/infra/hive/schema-init.sh"]
+    secrets:
+      - metastore-db-password
+    volumes:
+      - ./.runtime/hive-conf:/hive_custom_conf:ro
+      - ./infra/hive/schema-init.sh:/infra/hive/schema-init.sh:ro
+      - ./infra/kerberos/krb5.conf:/etc/krb5.conf:ro
+    networks:
+      - iceberg_net
+
+  object-store:
+    image: rustfs/rustfs:1.0.0-glibc@sha256:bffcab0c9d647aab0055d1c69d340b202d0909966b385932d4ead1aeb7602858
+    container_name: iceberg-poc-object-store
+    env_file:
+      - ./.runtime/credentials/rustfs.env
+    environment:
+      RUSTFS_OBS_LOG_STDOUT_ENABLED: "true"
+      RUSTFS_SERVER_DOMAINS: minio
+    command: /data
+    ports:
+      - "127.0.0.1:${S3_API_PORT:-9000}:9000"
+      - "127.0.0.1:${S3_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - object-store-data:/data
+    networks:
+      iceberg_net:
+        aliases:
+          - minio
+          - warehouse.minio
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:9000/health/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  create-bucket:
+    build:
+      context: ./infra/bucket-init
+      dockerfile: Dockerfile
+    container_name: iceberg-poc-create-bucket
+    depends_on:
+      object-store:
+        condition: service_healthy
+    env_file:
+      - ./.runtime/credentials/rustfs.env
+    environment:
+      AWS_DEFAULT_REGION: ${AWS_REGION:-us-east-1}
+      S3_ENDPOINT: http://object-store:9000
+    networks:
+      - iceberg_net
+
+  hive-metastore:
+    image: local/hive-metastore:3.1.3-native-pgjdbc42.7.14
+    build:
+      context: ./infra/hive
+      dockerfile: Dockerfile
+    container_name: iceberg-poc-hive-metastore
+    hostname: hive-metastore
+    depends_on:
+      metastore-db:
+        condition: service_healthy
+      hive-schema-init:
+        condition: service_completed_successfully
+      kdc:
+        condition: service_healthy
+      create-bucket:
+        condition: service_completed_successfully
+    environment:
+      SERVICE_NAME: metastore
+      DB_DRIVER: postgres
+      IS_RESUME: "true"
+      HIVE_CUSTOM_CONF_DIR: /hive_custom_conf
+      SERVICE_OPTS: >-
+        -Dmetastore.kerberos.principal=hive/_HOST@${KERBEROS_REALM:-LAKEHOUSE.LOCAL}
+    volumes:
+      - ./.runtime/hive-conf:/hive_custom_conf:ro
+      - ./.runtime/credentials/keytabs:/run/credentials:ro
+      - ./infra/kerberos/krb5.conf:/etc/krb5.conf:ro
+    networks:
+      - iceberg_net
+    healthcheck:
+      test: ["CMD-SHELL", "bash -ec 'echo > /dev/tcp/127.0.0.1/9083'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  spark:
+    build:
+      context: ./infra/spark
+      dockerfile: Dockerfile
+    image: local/spark-iceberg:3.5.5_1.8.1-krb5
+    container_name: iceberg-poc-spark
+    depends_on:
+      kdc:
+        condition: service_healthy
+      object-store:
+        condition: service_healthy
+      create-bucket:
+        condition: service_completed_successfully
+      hive-metastore:
+        condition: service_healthy
+    environment:
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_EC2_METADATA_DISABLED: "true"
+      AWS_SHARED_CREDENTIALS_FILE: /run/krb5/aws-credentials
+      S3_ENDPOINT: http://object-store:9000
+      KRB5_CONFIG: /etc/krb5.conf
+      KRB5CCNAME: FILE:/run/krb5/ccache
+      RUSTFS_WRITER_ACCESS_KEY_FILE: /run/secrets/rustfs-writer-access-key
+      RUSTFS_WRITER_SECRET_KEY_FILE: /run/secrets/rustfs-writer-secret-key
+      SPARK_LIFECYCLE_STATE_FILE: /run/krb5/lifecycle-state
+      SPARK_MASTER_HOST: spark
+      SPARK_RUNTIME_DIR: /run/krb5
+      SPARK_WRITER_KEYTAB: /run/credentials/write-service-account.keytab
+      SPARK_WRITER_PRINCIPAL: write-service-account@${KERBEROS_REALM:-LAKEHOUSE.LOCAL}
+    entrypoint: ["/bin/bash", "/infra/spark/entrypoint.sh"]
+    command: ["notebook"]
+    ports:
+      - "127.0.0.1:${SPARK_UI_PORT:-8082}:8080"
+      - "127.0.0.1:${SPARK_MASTER_PORT:-7077}:7077"
+    volumes:
+      - ./infra/spark:/opt/spark/work-dir
+      - ./infra/spark/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
+      - ./infra/spark/entrypoint.sh:/infra/spark/entrypoint.sh:ro
+      - ./infra/kerberos/krb5.conf:/etc/krb5.conf:ro
+      - ./.runtime/credentials/keytabs/write-service-account.keytab:/run/credentials/write-service-account.keytab:ro
+    secrets:
+      - rustfs-writer-access-key
+      - rustfs-writer-secret-key
+    tmpfs:
+      - /run/krb5:mode=0700,size=16m
+    networks:
+      - iceberg_net
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          test "$$(cat /run/krb5/lifecycle-state 2>/dev/null)" = READY
+          && klist -s -c "$${KRB5CCNAME}"
+          && master_json=$$(curl --connect-timeout 2 --max-time 3 -fsS http://127.0.0.1:8080/json/)
+          && printf '%s' "$$master_json" | grep -Eq '"aliveworkers"[[:space:]]*:[[:space:]]*[1-9]'
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  jupyterhub:
+    image: local/iceberg-jupyterhub:5.3.0
+    build:
+      context: ./infra/jupyter/hub
+      dockerfile: Dockerfile
+    container_name: iceberg-poc-jupyterhub
+    depends_on:
+      kdc:
+        condition: service_healthy
+      hive-metastore:
+        condition: service_healthy
+      object-store:
+        condition: service_healthy
+    environment:
+      JUPYTER_CREDENTIALS_DIR: ${JUPYTER_CREDENTIALS_DIR:-${PWD}/.runtime/credentials}
+      JUPYTER_CREDENTIALS_VALIDATION_DIR: /run/credential-validation
+      JUPYTER_EXAMPLES_DIR: ${JUPYTER_EXAMPLES_DIR:-${PWD}/infra/jupyter/examples}
+      JUPYTER_HOST_GID: ${JUPYTER_HOST_GID:-20}
+      JUPYTER_HOST_UID: ${JUPYTER_HOST_UID:-1000}
+      KERBEROS_REALM: ${KERBEROS_REALM:-LAKEHOUSE.LOCAL}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      FREEIPA_LDAP_HOST: ${FREEIPA_HOSTNAME:-ipa.lakehouse.local}
+      FREEIPA_LDAP_USER_BASE: ${FREEIPA_LDAP_USER_BASE:-cn=users,cn=accounts,dc=lakehouse,dc=local}
+      FREEIPA_LDAP_GROUP_BASE: ${FREEIPA_LDAP_GROUP_BASE:-cn=groups,cn=accounts,dc=lakehouse,dc=local}
+      FREEIPA_LDAP_READER_DN: ${FREEIPA_LDAP_READER_DN:-uid=jupyterhub-ldap-reader,cn=users,cn=accounts,dc=lakehouse,dc=local}
+      DOCKER_NETWORK_NAME: iceberg-poc-net
+      DOCKER_NOTEBOOK_IMAGE: local/iceberg-jupyter-singleuser:5.3.0-spark3.5.5-iceberg1.8.1
+    ports:
+      - "127.0.0.1:${JUPYTERHUB_PORT:-8008}:8000"
+    volumes:
+      - jupyterhub-data:/srv/jupyterhub
+      - /var/run/docker.sock:/var/run/docker.sock
+      - type: bind
+        source: ./.runtime/freeipa/ca.crt
+        target: /run/freeipa/ca.crt
+        read_only: true
+        bind:
+          create_host_path: false
+      - ./.runtime/credentials/keytabs/admin.keytab:/run/credential-validation/keytabs/admin.keytab:ro
+      - ./.runtime/credentials/keytabs/developer-user.keytab:/run/credential-validation/keytabs/developer-user.keytab:ro
+      - ./.runtime/credentials/keytabs/analyst-user.keytab:/run/credential-validation/keytabs/analyst-user.keytab:ro
+      - ./.runtime/credentials/rustfs-admin-access-key:/run/credential-validation/rustfs-admin-access-key:ro
+      - ./.runtime/credentials/rustfs-admin-secret-key:/run/credential-validation/rustfs-admin-secret-key:ro
+      - ./.runtime/credentials/rustfs-developer-access-key:/run/credential-validation/rustfs-developer-access-key:ro
+      - ./.runtime/credentials/rustfs-developer-secret-key:/run/credential-validation/rustfs-developer-secret-key:ro
+      - ./.runtime/credentials/rustfs-analyst-access-key:/run/credential-validation/rustfs-analyst-access-key:ro
+      - ./.runtime/credentials/rustfs-analyst-secret-key:/run/credential-validation/rustfs-analyst-secret-key:ro
+      - type: bind
+        source: ./.runtime/credentials/freeipa-jupyterhub-ldap-reader-password
+        target: /run/secrets/freeipa-jupyterhub-ldap-reader-password
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./.runtime/credentials/jupyterhub-auth-state-crypt-key
+        target: /run/secrets/jupyterhub-auth-state-crypt-key
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      - iceberg_net
+      - jupyterhub_ipa_net
+
+  jupyter-singleuser-build:
+    profiles: [jupyter-build]
+    image: local/iceberg-jupyter-singleuser:5.3.0-spark3.5.5-iceberg1.8.1
+    build:
+      context: .
+      dockerfile: infra/jupyter/singleuser/Dockerfile
+    entrypoint: ["/bin/true"]
+
+  tpch-generator:
+    profiles: [workload]
+    build:
+      context: ./infra/tpch-generator
+      dockerfile: Dockerfile
+    environment:
+      TPCH_SCALE_FACTOR: ${TPCH_SCALE_FACTOR:-1}
+      TPCH_OUTPUT_DIR: /opt/tpch/data
+    volumes:
+      - ./.runtime/workload/tpch-data:/opt/tpch/data
+    networks:
+      - iceberg_net
+
+  tpch-loader:
+    profiles: [workload]
+    image: local/tpch-loader:3.5.5_1.8.1
+    build:
+      context: ./infra/tpch-loader
+      dockerfile: Dockerfile
+    depends_on:
+      kdc:
+        condition: service_healthy
+      object-store:
+        condition: service_healthy
+      create-bucket:
+        condition: service_completed_successfully
+      hive-metastore:
+        condition: service_healthy
+    environment:
+      LAKEHOUSE_ENVIRONMENT: ${LAKEHOUSE_ENVIRONMENT:-}
+      TPCH_DATABASES: ${TPCH_DATABASES:-}
+      TPCH_SCALE_FACTOR: ${TPCH_SCALE_FACTOR:-1}
+      TPCH_INPUT_DIR: /opt/tpch/data
+      TPCH_RESULTS_DIR: /run/results
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      S3_ENDPOINT: http://object-store:9000
+      KERBEROS_REALM: ${KERBEROS_REALM:-LAKEHOUSE.LOCAL}
+      WRITE_PRINCIPAL: write-service-account@${KERBEROS_REALM:-LAKEHOUSE.LOCAL}
+      KRB5_CONFIG: /etc/krb5.conf
+      KRB5CCNAME: FILE:/run/krb5/ccache
+      SPARK_LOCAL_IP: 127.0.0.1
+    entrypoint: ["/bin/bash", "/infra/tpch-loader/run-workload.sh"]
+    volumes:
+      - ./.runtime/workload/tpch-data:/opt/tpch/data:ro
+      - ./.runtime/workload/results:/run/results
+      - ./infra/tpch-loader/load_tpch.py:/opt/tpch/load_tpch.py:ro
+      - ./infra/tpch-loader:/infra/tpch-loader:ro
+      - ./infra/spark/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
+      - ./infra/kerberos/krb5.conf:/etc/krb5.conf:ro
+      - ./.runtime/credentials/keytabs/write-service-account.keytab:/run/credentials/write-service-account.keytab:ro
+    tmpfs:
+      - /run/krb5:mode=0700
+    secrets:
+      - rustfs-writer-access-key
+      - rustfs-writer-secret-key
+    networks:
+      - iceberg_net
+
+  airflow-postgres:
+    image: postgres:16.14@sha256:be01cf82fc7dbba824acf0a82e150b4b360f3ff93c6631d7844af431e841a95c
+    environment:
+      POSTGRES_DB: airflow
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD_FILE: /run/secrets/airflow-postgres-password
+    secrets:
+      - airflow-postgres-password
+    volumes:
+      - airflow-postgres-data:/var/lib/postgresql/data
+    networks:
+      - iceberg_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  airflow-init:
+    image: local/lakehouse-airflow:3.3.2
+    build:
+      context: ./infra/airflow
+      dockerfile: Dockerfile
+    user: "${AIRFLOW_UID:?Set AIRFLOW_UID to the owner UID of Airflow secret files}:0"
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+    environment: &airflow-environment
+      AIRFLOW_HOME: /opt/airflow
+      AIRFLOW_UID: ${AIRFLOW_UID:?Set AIRFLOW_UID to the owner UID of Airflow secret files}
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN_CMD: python /opt/airflow/scripts/airflow-secret-command.py database-url
+      AIRFLOW__CORE__FERNET_KEY_CMD: cat /run/secrets/airflow-fernet-key
+      AIRFLOW__API__SECRET_KEY_CMD: cat /run/secrets/airflow-api-secret-key
+      AIRFLOW__API_AUTH__JWT_SECRET_CMD: cat /run/secrets/airflow-jwt-secret
+      AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8080/execution/
+      AIRFLOW__DAG_PROCESSOR__DAG_BUNDLE_STORAGE_PATH: ${LAKEHOUSE_BUNDLE_CONTAINER_ROOT:?Set LAKEHOUSE_BUNDLE_CONTAINER_ROOT}
+      AIRFLOW__DAG_PROCESSOR__DAG_BUNDLE_CONFIG_LIST: *airflow-bundle-config-list
+      AIRFLOW_ADMIN_USERNAME: ${AIRFLOW_ADMIN_USERNAME:-admin}
+      LAKEHOUSE_SPARK_IMAGE: ${LAKEHOUSE_SPARK_IMAGE:-local/spark-iceberg:3.5.5_1.8.1-krb5}
+      LAKEHOUSE_SPARK_DOCKER_NETWORK: ${LAKEHOUSE_SPARK_DOCKER_NETWORK:-iceberg-poc-net}
+      SPARK_WRITER_PRINCIPAL: write-service-account@${KERBEROS_REALM:-LAKEHOUSE.LOCAL}
+      LAKEHOUSE_PROJECT_ROOT: ${LAKEHOUSE_PROJECT_ROOT:?Set LAKEHOUSE_PROJECT_ROOT}
+      LAKEHOUSE_BUNDLE_HOST_ROOT: ${LAKEHOUSE_BUNDLE_HOST_ROOT:?Set LAKEHOUSE_BUNDLE_HOST_ROOT}
+      LAKEHOUSE_BUNDLE_CONTAINER_ROOT: ${LAKEHOUSE_BUNDLE_CONTAINER_ROOT:?Set LAKEHOUSE_BUNDLE_CONTAINER_ROOT}
+      LAKEHOUSE_BUNDLE_CONFIG_LIST: *airflow-bundle-config-list
+    secrets:
+      - airflow-postgres-password
+      - airflow-fernet-key
+      - airflow-api-secret-key
+      - airflow-jwt-secret
+      - airflow-admin-password
+    networks:
+      - iceberg_net
+    command: ["bash", "-ec", "airflow db migrate && python /opt/airflow/scripts/bootstrap-airflow-admin.py"]
+    restart: "no"
+
+  airflow-api-server:
+    image: local/lakehouse-airflow:3.3.2
+    build:
+      context: ./infra/airflow
+      dockerfile: Dockerfile
+    user: "${AIRFLOW_UID:?Set AIRFLOW_UID to the owner UID of Airflow secret files}:0"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    environment: *airflow-environment
+    secrets: *airflow-secrets
+    ports:
+      - "8085:8080"
+    networks:
+      - iceberg_net
+    command: ["api-server"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl --connect-timeout 2 --max-time 4 -fsS http://127.0.0.1:8080/api/v2/version >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 240s
+    restart: unless-stopped
+
+  airflow-scheduler:
+    image: local/lakehouse-airflow:3.3.2
+    build:
+      context: ./infra/airflow
+      dockerfile: Dockerfile
+    user: "${AIRFLOW_UID:?Set AIRFLOW_UID to the owner UID of Airflow secret files}:0"
+    group_add:
+      - "${DOCKER_GID:?Set DOCKER_GID to the Docker socket group ID}"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    environment: *airflow-environment
+    secrets: *airflow-secrets
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - type: bind
+        source: ${LAKEHOUSE_BUNDLE_HOST_ROOT:?Set LAKEHOUSE_BUNDLE_HOST_ROOT}
+        target: ${LAKEHOUSE_BUNDLE_CONTAINER_ROOT:?Set LAKEHOUSE_BUNDLE_CONTAINER_ROOT}
+        bind:
+          create_host_path: false
+      - ${LAKEHOUSE_PROJECT_ROOT:?Set LAKEHOUSE_PROJECT_ROOT}/infra/spark/entrypoint.sh:${LAKEHOUSE_PROJECT_ROOT:?Set LAKEHOUSE_PROJECT_ROOT}/infra/spark/entrypoint.sh:ro
+      - ${LAKEHOUSE_PROJECT_ROOT:?Set LAKEHOUSE_PROJECT_ROOT}/infra/spark/spark-defaults.conf:${LAKEHOUSE_PROJECT_ROOT:?Set LAKEHOUSE_PROJECT_ROOT}/infra/spark/spark-defaults.conf:ro
+      - ${LAKEHOUSE_PROJECT_ROOT:?Set LAKEHOUSE_PROJECT_ROOT}/infra/kerberos/krb5.conf:${LAKEHOUSE_PROJECT_ROOT:?Set LAKEHOUSE_PROJECT_ROOT}/infra/kerberos/krb5.conf:ro
+    tmpfs:
+      - ${LAKEHOUSE_PROJECT_ROOT:?Set LAKEHOUSE_PROJECT_ROOT}:uid=${AIRFLOW_UID:?Set AIRFLOW_UID},gid=0,mode=0755,size=64m
+    networks:
+      - iceberg_net
+    command: ["scheduler"]
+    restart: unless-stopped
+
+  airflow-dag-processor:
+    image: local/lakehouse-airflow:3.3.2
+    build:
+      context: ./infra/airflow
+      dockerfile: Dockerfile
+    user: "${AIRFLOW_UID:?Set AIRFLOW_UID to the owner UID of Airflow secret files}:0"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    environment: *airflow-environment
+    secrets: *airflow-secrets
+    volumes:
+      - type: bind
+        source: ${LAKEHOUSE_BUNDLE_HOST_ROOT:?Set LAKEHOUSE_BUNDLE_HOST_ROOT}
+        target: ${LAKEHOUSE_BUNDLE_CONTAINER_ROOT:?Set LAKEHOUSE_BUNDLE_CONTAINER_ROOT}
+        bind:
+          create_host_path: false
+    networks:
+      - iceberg_net
+    command: ["dag-processor"]
+    restart: unless-stopped
+
+  airflow-triggerer:
+    image: local/lakehouse-airflow:3.3.2
+    build:
+      context: ./infra/airflow
+      dockerfile: Dockerfile
+    user: "${AIRFLOW_UID:?Set AIRFLOW_UID to the owner UID of Airflow secret files}:0"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    environment: *airflow-environment
+    secrets: *airflow-secrets
+    networks:
+      - iceberg_net
+    command: ["triggerer"]
+    restart: unless-stopped
+
+  jenkins:
+    image: local/lakehouse-jenkins-validation:1.0.0
+    build:
+      context: .
+      dockerfile: infra/jenkins/Dockerfile
+    group_add:
+      - "${DOCKER_GID:?Set DOCKER_GID to the Docker socket group ID}"
+    ports:
+      - "8098:8080"
+    volumes:
+      - jenkins-home:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - iceberg_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl --connect-timeout 2 --max-time 4 -fsS http://127.0.0.1:8080/login >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 240s
+    restart: unless-stopped
+
+  starrocks-preflight:
+    profiles: [starrocks]
+    build:
+      context: ./infra/starrocks/preflight
+      dockerfile: Dockerfile
+    container_name: iceberg-poc-starrocks-preflight
+    entrypoint: ["/bin/sh", "/usr/local/bin/check-paired-state"]
+    volumes:
+      - starrocks-fe-meta:/state/fe:ro
+      - starrocks-be-storage:/state/be:ro
+    networks:
+      - iceberg_net
+
+  starrocks-fe:
+    profiles: [starrocks]
+    build:
+      context: ./infra/starrocks
+      dockerfile: fe/Dockerfile
+      args:
+        STARROCKS_BASE: starrocks/fe-ubuntu:4.1.6@sha256:d07aa750be77625a09866a76dbfe0ee032baeb5e48fe0e952d30cb525329dc31
+    image: local/starrocks-fe:4.1.6-kerberos
+    container_name: iceberg-poc-starrocks-fe
+    hostname: starrocks-fe
+    depends_on:
+      kdc:
+        condition: service_healthy
+      starrocks-preflight:
+        condition: service_completed_successfully
+    environment:
+      KERBEROS_REALM: ${KERBEROS_REALM:-LAKEHOUSE.LOCAL}
+      STARROCKS_PRINCIPAL: starrocks@${KERBEROS_REALM:-LAKEHOUSE.LOCAL}
+      KRB5_CONFIG: /etc/krb5.conf
+      KRB5CCNAME: FILE:/run/krb5/ccache
+      AWS_EC2_METADATA_DISABLED: "true"
+    secrets:
+      - rustfs-starrocks-secret-key
+    ports:
+      - "127.0.0.1:8030:8030"
+      - "127.0.0.1:9030:9030"
+    volumes:
+      - starrocks-fe-meta:/opt/starrocks/fe/meta
+      - ./.runtime/credentials/keytabs/starrocks.keytab:/run/credentials/starrocks.keytab:ro
+      - ./infra/kerberos/krb5.conf:/etc/krb5.conf:ro
+      - ./infra/starrocks/conf/core-site.xml:/etc/starrocks/core-site.xml.template:ro
+      - ./infra/starrocks/conf/hive-site.xml:/opt/starrocks/fe/conf/hive-site.xml:ro
+    tmpfs:
+      - /run/krb5:mode=0700,size=16m
+    networks:
+      - iceberg_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl --connect-timeout 2 -fsS http://127.0.0.1:8030/api/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 60s
+    restart: unless-stopped
+
+  starrocks-be:
+    profiles: [starrocks]
+    build:
+      context: ./infra/starrocks
+      dockerfile: be/Dockerfile
+      args:
+        STARROCKS_BASE: starrocks/be-ubuntu:4.1.6@sha256:bf0f5ca7fd9fc4e568d4d0e593e362f229b376976b513a5a549b1b922d9ec23b
+    image: local/starrocks-be:4.1.6-kerberos
+    container_name: iceberg-poc-starrocks-be
+    hostname: starrocks-be
+    depends_on:
+      kdc:
+        condition: service_healthy
+      starrocks-preflight:
+        condition: service_completed_successfully
+      starrocks-fe:
+        condition: service_healthy
+    environment:
+      KERBEROS_REALM: ${KERBEROS_REALM:-LAKEHOUSE.LOCAL}
+      STARROCKS_PRINCIPAL: starrocks@${KERBEROS_REALM:-LAKEHOUSE.LOCAL}
+      KRB5_CONFIG: /etc/krb5.conf
+      KRB5CCNAME: FILE:/run/krb5/ccache
+      STARROCKS_FE_HOST: starrocks-fe
+      AWS_EC2_METADATA_DISABLED: "true"
+    secrets:
+      - rustfs-starrocks-secret-key
+    volumes:
+      - starrocks-be-storage:/opt/starrocks/be/storage
+      - ./.runtime/credentials/keytabs/starrocks.keytab:/run/credentials/starrocks.keytab:ro
+      - ./infra/kerberos/krb5.conf:/etc/krb5.conf:ro
+      - ./infra/starrocks/conf/core-site.xml:/etc/starrocks/core-site.xml.template:ro
+      - ./infra/starrocks/conf/hive-site.xml:/opt/starrocks/be/conf/hive-site.xml:ro
+    tmpfs:
+      - /run/krb5:mode=0700,size=16m
+    networks:
+      - iceberg_net
+    healthcheck:
+      test: ["CMD-SHELL", "bash -ec 'echo > /dev/tcp/127.0.0.1/9050'"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 60s
+    restart: unless-stopped
+
+networks:
+  iceberg_net:
+    name: iceberg-poc-net
+  freeipa_validation_net:
+    name: iceberg-poc-freeipa-validation-net
+    ipam:
+      config:
+        - subnet: ${FREEIPA_VALIDATION_SUBNET:-172.30.250.0/24}
+  identity_test_net:
+    name: identity_test_net
+    internal: true
+  jupyterhub_ipa_net:
+    name: iceberg-poc-jupyterhub-ipa-net
+    internal: true
+
+volumes:
+  freeipa-validation-data:
+    name: iceberg-poc-freeipa-validation-data-nss-patched2
+  object-store-data:
+  metastore-db-data:
+  airflow-postgres-data:
+    name: iceberg-poc-airflow-postgres-data
+  jenkins-home:
+    name: iceberg-poc-jenkins-home
+  kerberos-kdc-data:
+  jupyterhub-data:
+    name: iceberg-poc-jupyterhub-data
+  jupyter-user-a-work:
+    name: iceberg-poc-jupyter-user-a-work
+  jupyter-user-b-work:
+    name: iceberg-poc-jupyter-user-b-work
+  jupyter-admin-work:
+    name: iceberg-poc-jupyter-admin-work
+  jupyter-developer-work:
+    name: iceberg-poc-jupyter-developer-user-work
+  jupyter-analyst-work:
+    name: iceberg-poc-jupyter-analyst-user-work
+  starrocks-fe-meta:
+    name: iceberg-poc-starrocks-fe-meta
+  starrocks-be-storage:
+    name: iceberg-poc-starrocks-be-storage
+
+secrets:
+  freeipa-server-install-options:
+    file: ./.runtime/credentials/freeipa-server-install-options
+  airflow-postgres-password:
+    file: ./.runtime/credentials/airflow-postgres-password
+  airflow-admin-password:
+    file: ./.runtime/credentials/airflow-admin-password
+  airflow-fernet-key:
+    file: ./.runtime/credentials/airflow-fernet-key
+  airflow-api-secret-key:
+    file: ./.runtime/credentials/airflow-api-secret-key
+  airflow-jwt-secret:
+    file: ./.runtime/credentials/airflow-jwt-secret
+  kdc-master-password:
+    file: ./.runtime/credentials/kdc-master-password
+  metastore-db-password:
+    file: ./.runtime/credentials/postgres-password
+  postgres-admin-password:
+    file: ./.runtime/credentials/postgres-admin-password
+  rustfs-root-access-key:
+    file: ./.runtime/credentials/rustfs-access-key
+  rustfs-root-secret-key:
+    file: ./.runtime/credentials/rustfs-secret-key
+  rustfs-admin-access-key:
+    file: ./.runtime/credentials/rustfs-admin-access-key
+  rustfs-admin-secret-key:
+    file: ./.runtime/credentials/rustfs-admin-secret-key
+  rustfs-writer-access-key:
+    file: ./.runtime/credentials/rustfs-writer-access-key
+  rustfs-writer-secret-key:
+    file: ./.runtime/credentials/rustfs-writer-secret-key
+  rustfs-hive-access-key:
+    file: ./.runtime/credentials/rustfs-hive-access-key
+  rustfs-hive-secret-key:
+    file: ./.runtime/credentials/rustfs-hive-secret-key
+  rustfs-user-a-access-key:
+    file: ./.runtime/credentials/rustfs-user-a-access-key
+  rustfs-user-a-secret-key:
+    file: ./.runtime/credentials/rustfs-user-a-secret-key
+  rustfs-user-b-access-key:
+    file: ./.runtime/credentials/rustfs-user-b-access-key
+  rustfs-user-b-secret-key:
+    file: ./.runtime/credentials/rustfs-user-b-secret-key
+  rustfs-developer-access-key:
+    file: ./.runtime/credentials/rustfs-developer-access-key
+  rustfs-analyst-access-key:
+    file: ./.runtime/credentials/rustfs-analyst-access-key
+  rustfs-developer-secret-key:
+    file: ./.runtime/credentials/rustfs-developer-secret-key
+  rustfs-analyst-secret-key:
+    file: ./.runtime/credentials/rustfs-analyst-secret-key
+  rustfs-starrocks-secret-key:
+    file: ./.runtime/credentials/rustfs-starrocks-secret-key
+  rustfs-role-test-root-access-key:
+    file: ./.runtime/identity-provisioning/test-credentials/rustfs-root-access-key
+  rustfs-role-test-root-secret-key:
+    file: ./.runtime/identity-provisioning/test-credentials/rustfs-root-secret-key
+  rustfs-role-test-writer-secret-key:
+    file: ./.runtime/identity-provisioning/test-credentials/rustfs-writer-secret-key
+  rustfs-role-test-developer-secret-key:
+    file: ./.runtime/identity-provisioning/test-credentials/rustfs-developer-secret-key
+  rustfs-role-test-analyst-secret-key:
+    file: ./.runtime/identity-provisioning/test-credentials/rustfs-analyst-secret-key
+  rustfs-role-test-freeipa-reader-password:
+    file: ./.runtime/identity-provisioning/test-credentials/freeipa-rustfs-reader-password
+  freeipa-rustfs-reader-password:
+    file: ./.runtime/credentials/freeipa-rustfs-reader-password

@@ -1,0 +1,84 @@
+{
+  "intent_id": "20261023-hive-dremio-kerberos",
+  "name": "Hive, Kerberos, Dremio, RustFS, and JupyterHub PoC",
+  "objective": "Replace the active Nessie catalog path with Hive 3.x, configure Kerberos identities and impersonation, provision admin and write-service identities, and add isolated per-user Spark notebooks while retaining RustFS as Iceberg storage.",
+  "date": "2026-10-24",
+  "scope": "Local Docker Compose proof of concept. Airflow/Jenkins integration and production deployment are excluded. The user accepted closure with verification waived; no deployment was performed.",
+  "workstreams": [
+    "Unit 1: Hive catalog and local platform foundation",
+    "Unit 2: component identities and permissions",
+    "Unit 3: Spark sample ETL and Dremio objects",
+    "Unit 4: Dremio Hive identity and authorization path",
+    "Unit 5: JupyterHub and per-user Spark sessions",
+    "Deploy: local operator handoff"
+  ],
+  "verification": {
+    "status": "waived",
+    "user_accepted": true,
+    "details": "User explicitly accepted closure with verification waived. Build and Test remains partial, not passed. Dremio user_a was confirmed able to query databaseB, contrary to the required deny matrix. Notebook user_a databaseB denial was reported but not classified; notebook user_a databaseA access, unknown-label rejection, complete mount/socket review for all users, workspace isolation/persistence, and three-session concurrency remain unverified. User-reported user_b notebook reads in both databases and the recorded admin sample query are retained as evidence with their stated limits. No deployment was performed."
+  },
+  "artifact_inventory_complete": true,
+  "summary": {
+    "major_requirements": [
+      "Use Hive 3.x Metastore backed by PostgreSQL as the Iceberg catalog, with Iceberg data in RustFS.",
+      "Use a disposable Kerberos realm and distinct admin, write-service-account, and test-user identities.",
+      "Run sample Spark ETL as write-service-account and provide Dremio and Jupyter query paths.",
+      "Attempt per-user database authorization for user_a and user_b; preserve the known Dremio authorization failure and partial notebook evidence.",
+      "Add local-only JupyterHub sessions with per-user keytab and RustFS credentials."
+    ],
+    "design_decisions": [
+      "Standalone Hive Metastore with PostgreSQL; HiveServer2 is not in the baseline.",
+      "RustFS remains the S3-compatible Iceberg warehouse; Kerberos and S3 credentials remain separate identity systems.",
+      "Dremio Community uses local identities and a Kerberos-authenticated Hive source; source/space RBAC is not available in this Community edition.",
+      "JupyterHub uses a development-only DummyAuthenticator and is bound to localhost.",
+      "Airflow/Jenkins integration and direct RustFS authorization as a user-facing test are excluded."
+    ],
+    "implementation_decisions": [
+      "Provision component-native identities through the repository's local identity setup and keep generated credentials under ignored runtime paths.",
+      "Use write-service-account for sample Spark ETL and Dremio JDBC object creation paths; do not use admin as a fallback.",
+      "Give notebook sessions separate identity mounts, per-user RustFS credentials, and separate persistent work volumes.",
+      "Retain the approved Compose startup/stop and deployment handoff instructions."
+    ],
+    "deviations": [
+      "Unit 5 Build and Test is partial under a user-accepted waiver; the workflow is closed without claiming full acceptance.",
+      "Dremio user_a access to databaseB is a confirmed failure of the required authorization matrix; effective identity and RustFS credential path remain unresolved.",
+      "Notebook user_a's reported databaseB denial is not classified; multiple security, isolation, and capacity checks remain pending.",
+      "No deployment, credential rotation, or volume reset was performed."
+    ],
+    "superseded_decisions": [
+      "The inherited Nessie catalog path from the source PoC was replaced by the Hive 3.x Metastore path for this intent."
+    ]
+  },
+  "canonical_updates": [
+    {
+      "path": "aidlc-docs/knowledge/hive-dremio-rustfs/application-design.md",
+      "content": "# Current Application Design — Hive, Dremio, RustFS, Kerberos, and JupyterHub\n\n## Purpose and scope\n\nThis repository is a local Docker Compose proof of concept for Hive 3.x as the Iceberg catalog, RustFS as S3-compatible table storage, Kerberos identities for Hive access, Dremio queries, and isolated Spark notebooks through JupyterHub. Airflow and Jenkins integration are deferred. The design is not production authentication or a production deployment.\n\n## Components and boundaries\n\n- **Hive Metastore 3.1.3** stores catalog metadata in PostgreSQL and describes Iceberg table data in RustFS. The standalone metastore is used; HiveServer2 is not part of the deployed baseline.\n- **Kerberos KDC** provides service and user principals/keytabs in the disposable `LAKEHOUSE.LOCAL` realm. Dremio authenticates to Hive with a service identity; query-user impersonation is a separate authorization step.\n- **RustFS** stores Iceberg objects in the `lake` bucket. S3 access uses RustFS access/secret keys and policies, separate from Kerberos identities.\n- **Spark and TPCH loader** create/populate `databaseA` and `databaseB` as `write-service-account`, using the Hive catalog and RustFS warehouse.\n- **Dremio Community 26.0.5** connects to Hive 3.x and exposes catalog data for SQL queries. Its Community edition does not provide Enterprise RBAC grants for source/space visibility. Hive source user impersonation is configured, but the required Dremio per-user database authorization behavior was observed to fail for `user_a` querying `databaseB`.\n- **JupyterHub 5.3.0** starts isolated Spark single-user containers with per-user Kerberos and RustFS credentials. DummyAuthenticator usernames are development labels, not verified identities. The Hub is bound to localhost.\n\n## Identity and access boundaries\n\nKerberos names, Dremio local users, and RustFS S3 identities are distinct credentials that must be mapped deliberately. Hadoop proxy-user rules permit Dremio to impersonate an allowlisted name; they do not themselves grant Hive database access or select that user's RustFS S3 key. The Jupyter Spark configuration explicitly supplies each notebook identity's RustFS key. The Dremio-to-Hive-to-RustFS effective-user path remains unproven and must not be described as enforcing the intended per-user policy.\n\nThe intended data policy is `user_a` may read `databaseA` only, and `user_b` may read both databases. The Jupyter `user_b` results were user-reported as successful in both databases; the reported notebook `user_a` denial was not classified. Dremio `user_a` access to `databaseB` was confirmed, so the Dremio requirement is not met. See the archived Unit 5 manual verification record for the remaining verification limits.\n\n## Operations and lifecycle\n\nUse the repository startup/stop scripts and preserve named volumes and protected `.runtime/credentials` material during normal operation. Do not commit runtime secrets. The approved deployment handoff is local Compose guidance only; no deployment occurred. See the intent archive for complete requirements, designs, implementation records, verification evidence, and audit history: `aidlc-docs/archive/20261023-hive-dremio-kerberos/`.\n"
+    },
+    {
+      "path": "aidlc-docs/knowledge/hive-dremio-rustfs/functional-design/lakehouse-workload-and-access.md",
+      "content": "# Functional Design — Lakehouse Workload and Access\n\n## Catalog and sample workload\n\nThe Hive 3.x Metastore is the catalog for Iceberg tables stored under the RustFS `lake` warehouse. The sample workload uses Spark as `write-service-account` to create/populate `databaseA` and `databaseB`. Dremio connects to the same metastore and queries Hive-cataloged objects. The writer identity is not the platform administrator. Airflow/Jenkins orchestration is deferred.\n\n## Identity flow\n\n- Notebook sessions map the configured labels `user_a`, `user_b`, and `admin` to matching Kerberos principals and separate RustFS keys. DummyAuthenticator does not verify a person's identity.\n- Dremio connects to Hive using its Kerberos service principal. Storage Based with User Impersonation is selected; the query user is intended to be used when VDS-based delegation is disabled.\n- A Hadoop proxy-user allowlist controls which names Dremio can impersonate. It is not a data grant and does not automatically map Kerberos usernames to RustFS access keys.\n- Hive Metastore and query-engine S3A credentials/policies are independent authorization inputs. A shared RustFS key can allow reads regardless of the impersonated username.\n\n## Intended authorization behavior and observed outcome\n\n| Engine/user | databaseA | databaseB | Evidence at intent closure |\n|---|---|---|---|\n| Jupyter `user_a` | Allow | Deny | databaseA result pending; databaseB denial reported but not classified as Hive authorization vs RustFS/S3 |\n| Jupyter `user_b` | Allow | Allow | Both reads reported successful by user |\n| Dremio `user_a` | Allow | Deny | databaseB read confirmed successful after Hive authorization settings were rendered and Metastore restarted; intended policy failed |\n| Dremio `user_b` | Allow | Allow | Per-user matrix not fully verified |\n\nThe Dremio Community 26.0.5 edition does not include Enterprise source/space RBAC. Hive/storage authorization remains the intended data access boundary, but the Dremio per-user deny outcome is not achieved. Do not infer successful enforcement from source visibility, metadata discovery, a query as admin, or a generic access-denied error without identifying the effective identity and authorization layer.\n\n## Runtime and security limits\n\nThe stack is a local proof of concept with a disposable KDC, local Dremio users, and development-only Jupyter authentication. Per-user notebook identity files are mounted read-only; notebook workspaces are intended to be separated. Unknown-label rejection, full mount/socket review for all users, workspace isolation/persistence, and three-session concurrency were not verified before closure. No deployment or credential rotation was performed. Full evidence and unresolved checks are retained in the intent archive.\n"
+    }
+  ],
+  "artifacts": [
+    "aidlc-docs/current/inception",
+    "aidlc-docs/current/construction",
+    "aidlc-docs/current/deploy",
+    "aidlc-docs/current/compaction/20261023-hive-dremio-kerberos/manifest.json",
+    "README.md",
+    ".env.example",
+    ".gitignore",
+    "docker-compose.yml",
+    "infra",
+    "scripts",
+    "spark",
+    "sql",
+    "tpch",
+    "tpch-generator"
+  ],
+  "cleanup_paths": [
+    "aidlc-docs/current/inception",
+    "aidlc-docs/current/construction",
+    "aidlc-docs/current/deploy",
+    "aidlc-docs/current/compaction"
+  ]
+}

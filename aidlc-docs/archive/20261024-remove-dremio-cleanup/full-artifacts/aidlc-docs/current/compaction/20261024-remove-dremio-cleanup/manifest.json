@@ -1,0 +1,76 @@
+{
+  "intent_id": "20261024-remove-dremio-cleanup",
+  "name": "Remove Dremio and Clean the Project",
+  "objective": "Remove Dremio from the active local lakehouse project, retain the Hive/RustFS/Spark/Jupyter platform, and organize retained tooling while preserving user data.",
+  "date": "2026-10-24",
+  "scope": "Remove Dremio Compose, identity/configuration, JDBC integration, and stale examples; retain the TPCH Spark ETL and existing platform/data. Move Spark, loader, and generator files into infra/. Remove duplicate root TPCH input files only after byte-comparison with retained runtime copies. Runtime Dremio cleanup and live service/ETL checks were not performed.",
+  "workstreams": [
+    "Unit 1 — Dremio removal and retained lakehouse cleanup"
+  ],
+  "verification": {
+    "status": "waived",
+    "user_accepted": true,
+    "details": "The user explicitly accepted option B in deploy/verification-closure-questions.md on 2026-10-24. Docker Compose image builds, Compose configuration parsing, shell syntax, Python syntax, and targeted path/reference checks passed. Live service health and catalog/ETL integration were not run. The legacy Dremio container/data volume, KDC principal, and local Dremio credentials/keytab were not removed. No containers were started or stopped. This is an accepted verification limitation, not a pass."
+  },
+  "artifact_inventory_complete": true,
+  "summary": {
+    "major_requirements": [
+      "Remove Dremio and its JDBC integration from the active local project.",
+      "Retain Hive Metastore, PostgreSQL, Kerberos, RustFS, Spark, JupyterHub, and the TPCH Spark ETL.",
+      "Preserve non-Dremio platform data, identities, credentials, volumes, and notebook workspaces.",
+      "Remove only Dremio-specific runtime state through a narrowly scoped, confirmation-gated operation."
+    ],
+    "design_decisions": [
+      "Keep Hive Metastore as the Iceberg catalog and RustFS as table storage; do not introduce a replacement query engine.",
+      "Keep TPCH ETL writing as write-service-account and separate runtime cleanup from source/configuration cleanup.",
+      "Place Spark configuration, TPCH loader code, and TPCH generator assets under infra/.",
+      "Preserve the previous intent archive as historical evidence."
+    ],
+    "implementation_decisions": [
+      "Removed active Dremio service, identity/proxy configuration, JDBC workload integration, and stale Dremio SQL examples.",
+      "Updated Compose paths for infra/spark, infra/tpch-loader, and infra/tpch-generator.",
+      "Removed the standalone obsolete Hadoop Catalog seed example and duplicate root TPCH data after exact byte comparison with retained .runtime/workload/tpch-data/ files.",
+      "Added or retained a confirmation-gated Dremio-only cleanup script; it was not executed."
+    ],
+    "deviations": [
+      "Live integration and runtime cleanup were not performed. The user accepted this verification limitation; these checks remain unverified.",
+      "The private .env and ignored .runtime data/credentials were excluded from the archive inventory to avoid capturing local settings and secrets.",
+      "No Git metadata exists in the project directory, so the handoff has no repository diff or branch."
+    ],
+    "superseded_decisions": []
+  },
+  "canonical_updates": [
+    {
+      "path": "aidlc-docs/knowledge/hive-dremio-rustfs/application-design.md",
+      "content": "# Current Application Design — Hive, RustFS, Kerberos, Spark, and JupyterHub\n\n## Purpose and scope\n\nThis repository is a local Docker Compose lakehouse proof of concept. Hive Metastore 3.x is the Iceberg catalog, PostgreSQL stores Hive metadata, RustFS stores Iceberg objects, Spark runs ETL, and JupyterHub provides isolated Spark notebooks. Airflow and Jenkins orchestration are deferred. This is not a production authentication or deployment design.\n\n## Components and boundaries\n\n- **Hive Metastore 3.1.3** stores catalog metadata in PostgreSQL and describes Iceberg data in RustFS. The standalone metastore is used; HiveServer2 is not part of the deployed baseline.\n- **Kerberos KDC** provides service and user principals/keytabs in the local `LAKEHOUSE.LOCAL` realm. Hive uses its service identity; workload and notebook identities are provisioned separately.\n- **RustFS** stores Iceberg objects in the `lake` bucket. S3 access uses RustFS access/secret keys and policies, separate from Kerberos identities.\n- **Spark and TPCH loader** create and populate `databaseA` and `databaseB` as `write-service-account`, using Hive as the catalog and RustFS as the warehouse.\n- **JupyterHub 5.3.0** starts isolated Spark single-user containers with per-user Kerberos and RustFS credentials. DummyAuthenticator usernames are development labels, not verified identities. The Hub binds to localhost.\n\n## Identity and access boundaries\n\nKerberos principals, PostgreSQL roles, and RustFS S3 identities are separate credentials. The notebook configuration supplies each session's configured RustFS key and Kerberos identity. The writer identity is distinct from admin and user identities. Existing per-user storage authorization outcomes must only be described as verified when supported by evidence; source/user labels alone do not establish the effective identity at Hive or RustFS.\n\n## Operations and lifecycle\n\nUse the repository start/stop scripts and preserve named volumes and protected `.runtime/credentials` material during normal operation. Do not commit runtime secrets. The one-time Dremio removal cleanup is scoped to legacy Dremio-only runtime resources; it must not reset Hive metadata, the KDC, RustFS, TPCH data/results, or notebook workspace volumes. See the archived prior intent for historical records; its contents are preserved as history.\n"
+    },
+    {
+      "path": "aidlc-docs/knowledge/hive-dremio-rustfs/functional-design/lakehouse-workload-and-access.md",
+      "content": "# Functional Design — Lakehouse Workload and Access\n\n## Catalog and sample workload\n\nHive Metastore is the catalog for Iceberg tables stored in the RustFS `lake` warehouse. The sample workload uses Spark as `write-service-account` to create and populate `databaseA` and `databaseB`. Airflow/Jenkins orchestration is deferred.\n\n## Identity flow\n\n- Notebook labels `user_a`, `user_b`, and `admin` map to their configured Kerberos principals and separate RustFS identities. DummyAuthenticator does not verify a person's identity.\n- The Spark TPCH loader authenticates with the writer Kerberos keytab and uses the writer's RustFS credentials to write through the Hive catalog.\n- Kerberos proxy-user settings, Hive authorization, and RustFS policies are separate controls. One does not automatically grant access in the others.\n- The Hive metastore uses its configured RustFS service credentials to access table metadata and data. Notebook Spark sessions use their explicitly configured RustFS credentials.\n\n## Workload behavior\n\nThe optional TPCH workload generates scale-factor-1 input, validates all required input files, and uses Spark to create or validate the existing tables in both databases. Existing tables are kept when their schema and row counts match; conflicts stop the run rather than overwrite data. The loader emits a redacted manifest containing ETL states and diagnostics without credentials.\n\n## Data preservation and failure behavior\n\nRemoving unrelated query integrations must not change Hive databases/table schemas, existing Iceberg objects, TPCH source inputs/results, RustFS credentials, Kerberos identities other than those explicitly retired, or Jupyter workspaces. A failed ETL remains reported as failed, and existing table conflicts do not trigger replacement or cleanup.\n\n## Local development limits\n\nThe stack is a local proof of concept. Notebook usernames are development labels, and authorization claims require tests that establish the effective Kerberos/Hive identity and storage policy. No production identity provider or workflow orchestrator is included.\n"
+    }
+  ],
+  "artifacts": [
+    "aidlc-docs/current/inception",
+    "aidlc-docs/current/construction",
+    "aidlc-docs/current/deploy",
+    "aidlc-docs/current/compaction/20261024-remove-dremio-cleanup/manifest.json",
+    "aidlc-docs/knowledge/hive-dremio-rustfs",
+    "docker-compose.yml",
+    ".env.example",
+    ".gitignore",
+    "README.md",
+    "infra/hive",
+    "infra/kerberos",
+    "infra/identity-provisioner",
+    "infra/spark",
+    "infra/tpch-loader",
+    "infra/tpch-generator",
+    "scripts"
+  ],
+  "cleanup_paths": [
+    "aidlc-docs/current/inception",
+    "aidlc-docs/current/construction",
+    "aidlc-docs/current/deploy",
+    "aidlc-docs/current/compaction/20261024-remove-dremio-cleanup"
+  ]
+}

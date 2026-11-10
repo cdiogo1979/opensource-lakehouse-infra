@@ -1,0 +1,352 @@
+services:
+  kdc:
+    build:
+      context: ./infra/kerberos
+      dockerfile: Dockerfile
+    container_name: iceberg-poc-kdc
+    hostname: kdc
+    environment:
+      KERBEROS_REALM: ${KERBEROS_REALM:-LAKEHOUSE.LOCAL}
+      KDC_MASTER_PASSWORD_FILE: /run/secrets/kdc-master-password
+    secrets:
+      - kdc-master-password
+    volumes:
+      - kerberos-kdc-data:/var/lib/krb5kdc
+      - ./.runtime/credentials/keytabs:/keytabs
+    networks:
+      - iceberg_net
+    healthcheck:
+      test: ["CMD", "/usr/local/sbin/kdc-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  identity-provisioner:
+    profiles: [identity-provisioning]
+    build:
+      context: ./infra/identity-provisioner
+      dockerfile: Dockerfile
+    container_name: iceberg-poc-identity-provisioner
+    depends_on:
+      kdc:
+        condition: service_healthy
+      hive-metastore:
+        condition: service_healthy
+      create-bucket:
+        condition: service_completed_successfully
+    environment:
+      KERBEROS_REALM: ${KERBEROS_REALM:-LAKEHOUSE.LOCAL}
+      ROTATE_RUSTFS_WRITER_SECRET: ${ROTATE_RUSTFS_WRITER_SECRET:-false}
+    secrets:
+      - metastore-db-password
+      - postgres-admin-password
+      - rustfs-root-access-key
+      - rustfs-root-secret-key
+      - rustfs-admin-access-key
+      - rustfs-admin-secret-key
+      - rustfs-writer-access-key
+      - rustfs-writer-secret-key
+      - rustfs-hive-access-key
+      - rustfs-hive-secret-key
+      - rustfs-user-a-access-key
+      - rustfs-user-a-secret-key
+      - rustfs-user-b-access-key
+      - rustfs-user-b-secret-key
+    volumes:
+      - ./.runtime/credentials/keytabs/kadmin-provisioner.keytab:/run/credentials/kadmin-provisioner.keytab:ro
+      - ./.runtime/credentials/keytabs:/run/credentials/keytabs
+      - ./.runtime/identity-provisioning:/run/identity-status
+      - ./infra/kerberos/krb5.conf:/etc/krb5.conf:ro
+    networks:
+      - iceberg_net
+
+  metastore-db:
+    image: postgres:16.14@sha256:be01cf82fc7dbba824acf0a82e150b4b360f3ff93c6631d7844af431e841a95c
+    container_name: iceberg-poc-metastore-db
+    environment:
+      POSTGRES_DB: metastore
+      POSTGRES_USER: hive
+      POSTGRES_PASSWORD_FILE: /run/secrets/metastore-db-password
+    secrets:
+      - metastore-db-password
+    volumes:
+      - metastore-db-data:/var/lib/postgresql/data
+    networks:
+      - iceberg_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hive -d metastore"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  hive-schema-init:
+    image: local/hive-metastore:3.1.3-native-pgjdbc42.7.14
+    build:
+      context: ./infra/hive
+      dockerfile: Dockerfile
+    container_name: iceberg-poc-hive-schema-init
+    depends_on:
+      metastore-db:
+        condition: service_healthy
+    environment:
+      HIVE_CUSTOM_CONF_DIR: /hive_custom_conf
+      KRB5_CONFIG: /etc/krb5.conf
+      METASTORE_DB_HOST: metastore-db
+      METASTORE_DB_NAME: metastore
+      METASTORE_DB_USER: hive
+    entrypoint: ["/bin/bash", "/infra/hive/schema-init.sh"]
+    secrets:
+      - metastore-db-password
+    volumes:
+      - ./.runtime/hive-conf:/hive_custom_conf:ro
+      - ./infra/hive/schema-init.sh:/infra/hive/schema-init.sh:ro
+      - ./infra/kerberos/krb5.conf:/etc/krb5.conf:ro
+    networks:
+      - iceberg_net
+
+  object-store:
+    image: rustfs/rustfs:1.0.0-glibc@sha256:bffcab0c9d647aab0055d1c69d340b202d0909966b385932d4ead1aeb7602858
+    container_name: iceberg-poc-object-store
+    env_file:
+      - ./.runtime/credentials/rustfs.env
+    environment:
+      RUSTFS_OBS_LOG_STDOUT_ENABLED: "true"
+      RUSTFS_SERVER_DOMAINS: minio
+    command: /data
+    ports:
+      - "127.0.0.1:${S3_API_PORT:-9000}:9000"
+      - "127.0.0.1:${S3_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - object-store-data:/data
+    networks:
+      iceberg_net:
+        aliases:
+          - minio
+          - warehouse.minio
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:9000/health/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  create-bucket:
+    build:
+      context: ./infra/bucket-init
+      dockerfile: Dockerfile
+    container_name: iceberg-poc-create-bucket
+    depends_on:
+      object-store:
+        condition: service_healthy
+    env_file:
+      - ./.runtime/credentials/rustfs.env
+    environment:
+      AWS_DEFAULT_REGION: ${AWS_REGION:-us-east-1}
+      S3_ENDPOINT: http://object-store:9000
+    networks:
+      - iceberg_net
+
+  hive-metastore:
+    image: local/hive-metastore:3.1.3-native-pgjdbc42.7.14
+    build:
+      context: ./infra/hive
+      dockerfile: Dockerfile
+    container_name: iceberg-poc-hive-metastore
+    hostname: hive-metastore
+    depends_on:
+      metastore-db:
+        condition: service_healthy
+      hive-schema-init:
+        condition: service_completed_successfully
+      kdc:
+        condition: service_healthy
+      create-bucket:
+        condition: service_completed_successfully
+    environment:
+      SERVICE_NAME: metastore
+      DB_DRIVER: postgres
+      IS_RESUME: "true"
+      HIVE_CUSTOM_CONF_DIR: /hive_custom_conf
+      SERVICE_OPTS: >-
+        -Dmetastore.kerberos.principal=hive/_HOST@${KERBEROS_REALM:-LAKEHOUSE.LOCAL}
+    volumes:
+      - ./.runtime/hive-conf:/hive_custom_conf:ro
+      - ./.runtime/credentials/keytabs:/run/credentials:ro
+      - ./infra/kerberos/krb5.conf:/etc/krb5.conf:ro
+    networks:
+      - iceberg_net
+    healthcheck:
+      test: ["CMD-SHELL", "bash -ec 'echo > /dev/tcp/127.0.0.1/9083'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  spark:
+    image: tabulario/spark-iceberg:3.5.5_1.8.1@sha256:790a72e744e0d09f161e1b4c7c2f79625cc598cf0476da4703e62f1f4e023460
+    container_name: iceberg-poc-spark
+    depends_on:
+      object-store:
+        condition: service_healthy
+      create-bucket:
+        condition: service_completed_successfully
+      hive-metastore:
+        condition: service_healthy
+    environment:
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      S3_ENDPOINT: http://object-store:9000
+      KRB5_CONFIG: /etc/krb5.conf
+    entrypoint: ["/bin/bash", "/infra/spark/entrypoint.sh"]
+    command: ["notebook"]
+    ports:
+      - "127.0.0.1:${SPARK_UI_PORT:-8082}:8080"
+      - "127.0.0.1:${SPARK_MASTER_PORT:-7077}:7077"
+    volumes:
+      - ./infra/spark:/opt/spark/work-dir
+      - ./infra/spark/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
+      - ./infra/spark/entrypoint.sh:/infra/spark/entrypoint.sh:ro
+      - ./infra/kerberos/krb5.conf:/etc/krb5.conf:ro
+    networks:
+      - iceberg_net
+
+  jupyterhub:
+    image: local/iceberg-jupyterhub:5.3.0
+    build:
+      context: ./infra/jupyter/hub
+      dockerfile: Dockerfile
+    container_name: iceberg-poc-jupyterhub
+    depends_on:
+      kdc:
+        condition: service_healthy
+      hive-metastore:
+        condition: service_healthy
+      object-store:
+        condition: service_healthy
+    environment:
+      JUPYTER_CREDENTIALS_DIR: ${JUPYTER_CREDENTIALS_DIR:-${PWD}/.runtime/credentials}
+      JUPYTER_EXAMPLES_DIR: ${JUPYTER_EXAMPLES_DIR:-${PWD}/infra/jupyter/examples}
+      JUPYTER_HOST_GID: ${JUPYTER_HOST_GID:-20}
+      KERBEROS_REALM: ${KERBEROS_REALM:-LAKEHOUSE.LOCAL}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      DOCKER_NETWORK_NAME: iceberg-poc-net
+      DOCKER_NOTEBOOK_IMAGE: local/iceberg-jupyter-singleuser:5.3.0-spark3.5.5-iceberg1.8.1
+    ports:
+      - "127.0.0.1:${JUPYTERHUB_PORT:-8008}:8000"
+    volumes:
+      - jupyterhub-data:/srv/jupyterhub
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - iceberg_net
+
+  jupyter-singleuser-build:
+    profiles: [jupyter-build]
+    image: local/iceberg-jupyter-singleuser:5.3.0-spark3.5.5-iceberg1.8.1
+    build:
+      context: .
+      dockerfile: infra/jupyter/singleuser/Dockerfile
+    entrypoint: ["/bin/true"]
+
+  tpch-generator:
+    profiles: [workload]
+    build:
+      context: ./infra/tpch-generator
+      dockerfile: Dockerfile
+    environment:
+      TPCH_SCALE_FACTOR: ${TPCH_SCALE_FACTOR:-1}
+      TPCH_OUTPUT_DIR: /opt/tpch/data
+    volumes:
+      - ./.runtime/workload/tpch-data:/opt/tpch/data
+    networks:
+      - iceberg_net
+
+  tpch-loader:
+    profiles: [workload]
+    image: local/tpch-loader:3.5.5_1.8.1
+    build:
+      context: ./infra/tpch-loader
+      dockerfile: Dockerfile
+    depends_on:
+      kdc:
+        condition: service_healthy
+      object-store:
+        condition: service_healthy
+      create-bucket:
+        condition: service_completed_successfully
+      hive-metastore:
+        condition: service_healthy
+    environment:
+      TPCH_SCALE_FACTOR: ${TPCH_SCALE_FACTOR:-1}
+      TPCH_INPUT_DIR: /opt/tpch/data
+      TPCH_RESULTS_DIR: /run/results
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      S3_ENDPOINT: http://object-store:9000
+      KERBEROS_REALM: ${KERBEROS_REALM:-LAKEHOUSE.LOCAL}
+      WRITE_PRINCIPAL: write-service-account@${KERBEROS_REALM:-LAKEHOUSE.LOCAL}
+      KRB5_CONFIG: /etc/krb5.conf
+      KRB5CCNAME: FILE:/run/krb5/ccache
+      SPARK_LOCAL_IP: 127.0.0.1
+    entrypoint: ["/bin/bash", "/infra/tpch-loader/run-workload.sh"]
+    volumes:
+      - ./.runtime/workload/tpch-data:/opt/tpch/data:ro
+      - ./.runtime/workload/results:/run/results
+      - ./infra/tpch-loader/load_tpch.py:/opt/tpch/load_tpch.py:ro
+      - ./infra/tpch-loader:/infra/tpch-loader:ro
+      - ./infra/spark/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
+      - ./infra/kerberos/krb5.conf:/etc/krb5.conf:ro
+      - ./.runtime/credentials/keytabs/write-service-account.keytab:/run/credentials/write-service-account.keytab:ro
+    tmpfs:
+      - /run/krb5:mode=0700
+    secrets:
+      - rustfs-writer-access-key
+      - rustfs-writer-secret-key
+    networks:
+      - iceberg_net
+
+networks:
+  iceberg_net:
+    name: iceberg-poc-net
+
+volumes:
+  object-store-data:
+  metastore-db-data:
+  kerberos-kdc-data:
+  jupyterhub-data:
+    name: iceberg-poc-jupyterhub-data
+  jupyter-user-a-work:
+    name: iceberg-poc-jupyter-user-a-work
+  jupyter-user-b-work:
+    name: iceberg-poc-jupyter-user-b-work
+  jupyter-admin-work:
+    name: iceberg-poc-jupyter-admin-work
+
+secrets:
+  kdc-master-password:
+    file: ./.runtime/credentials/kdc-master-password
+  metastore-db-password:
+    file: ./.runtime/credentials/postgres-password
+  postgres-admin-password:
+    file: ./.runtime/credentials/postgres-admin-password
+  rustfs-root-access-key:
+    file: ./.runtime/credentials/rustfs-access-key
+  rustfs-root-secret-key:
+    file: ./.runtime/credentials/rustfs-secret-key
+  rustfs-admin-access-key:
+    file: ./.runtime/credentials/rustfs-admin-access-key
+  rustfs-admin-secret-key:
+    file: ./.runtime/credentials/rustfs-admin-secret-key
+  rustfs-writer-access-key:
+    file: ./.runtime/credentials/rustfs-writer-access-key
+  rustfs-writer-secret-key:
+    file: ./.runtime/credentials/rustfs-writer-secret-key
+  rustfs-hive-access-key:
+    file: ./.runtime/credentials/rustfs-hive-access-key
+  rustfs-hive-secret-key:
+    file: ./.runtime/credentials/rustfs-hive-secret-key
+  rustfs-user-a-access-key:
+    file: ./.runtime/credentials/rustfs-user-a-access-key
+  rustfs-user-a-secret-key:
+    file: ./.runtime/credentials/rustfs-user-a-secret-key
+  rustfs-user-b-access-key:
+    file: ./.runtime/credentials/rustfs-user-b-access-key
+  rustfs-user-b-secret-key:
+    file: ./.runtime/credentials/rustfs-user-b-secret-key

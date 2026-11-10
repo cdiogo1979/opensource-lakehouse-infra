@@ -1,0 +1,8 @@
+#!/bin/sh
+# Install a product repository's requirements.txt for the "Lakehouse (Python 3.10)" kernel,
+# constrained by the platform lock, into ~/.local/lakehouse/python3.10. Restart the kernel afterwards.
+# Usage: lakehouse-install-requirements [PATH] [--reset]
+#   PATH     requirements.txt, or a folder holding one (default: ./requirements.txt)
+#   --reset  empty the folder first (needed after a platform lock change)
+exec /opt/lakehouse/venv/bin/python /opt/lakehouse/workload_python.py install-extras "$@" \
+  --lock /opt/lakehouse/requirements.lock --target "$HOME/.local/lakehouse/python3.10"

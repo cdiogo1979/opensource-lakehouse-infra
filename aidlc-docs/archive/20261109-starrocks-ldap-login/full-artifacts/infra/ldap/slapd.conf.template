@@ -1,0 +1,45 @@
+# Rendered by ldap-entrypoint.sh at every start; @ADMIN_HASH@ is replaced by the
+# Argon2 hash of the protected admin password. No plain-text secret is written.
+include /etc/openldap/schema/core.schema
+include /etc/openldap/schema/cosine.schema
+include /etc/openldap/schema/inetorgperson.schema
+
+modulepath /usr/lib/openldap
+moduleload back_mdb.so
+moduleload argon2.so
+
+pidfile /run/openldap/slapd.pid
+argsfile /run/openldap/slapd.args
+
+# Passwords set through the password-modify operation are stored as Argon2.
+password-hash {ARGON2}
+
+TLSCACertificateFile /run/certs/ldap-ca.crt
+TLSCertificateFile /run/certs/ldap-server.crt
+TLSCertificateKeyFile /run/certs/ldap-server-key.pem
+TLSProtocolMin 3.3
+
+database mdb
+maxsize 1073741824
+suffix "dc=lakehouse,dc=local"
+rootdn "cn=admin,dc=lakehouse,dc=local"
+rootpw @ADMIN_HASH@
+directory /var/lib/openldap/data
+index objectClass eq
+index uid eq,pres
+
+# Keycloak (cn=keycloak) owns ou=people: it creates users and sets passwords.
+# People may change their own password; anonymous connections may only bind.
+access to attrs=userPassword
+  by dn.exact="cn=keycloak,ou=services,dc=lakehouse,dc=local" write
+  by self write
+  by anonymous auth
+  by * none
+access to dn.subtree="ou=people,dc=lakehouse,dc=local"
+  by dn.exact="cn=keycloak,ou=services,dc=lakehouse,dc=local" write
+  by self read
+  by * none
+access to dn.base="dc=lakehouse,dc=local"
+  by dn.exact="cn=keycloak,ou=services,dc=lakehouse,dc=local" read
+  by * none
+access to * by * none

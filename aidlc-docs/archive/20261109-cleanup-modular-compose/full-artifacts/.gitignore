@@ -1,0 +1,13 @@
+# Local runtime credentials and generated state
+.runtime/
+.env
+*.keytab
+*.jceks
+*.log
+
+# Python and local tooling artifacts
+__pycache__/
+*.py[cod]
+.DS_Store
+.pytest_cache/
+.hypothesis/

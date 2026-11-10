@@ -1,0 +1,13 @@
+#!/bin/sh
+# Validate a product repository's workflows/*.json and dags/ stub with the platform's
+# rules (infra/airflow/lakehouse_dags, mounted read-only), then its optional root
+# requirements.txt against the shared workload lock (infra/workload-python, mounted
+# read-only; needs PyPI). Usage: lakehouse-validate-workflows [ROOT]
+root="${1:-.}"
+status=0
+PYTHONPATH=/opt/lakehouse/python python3 -m lakehouse_dags.validate "$@" || status=$?
+if [ "$status" -ne 2 ] && [ -f "$root/requirements.txt" ]; then
+  python3 /opt/lakehouse/workload-python/workload_python.py check-extras "$root/requirements.txt" \
+    --lock /opt/lakehouse/workload-python/requirements.lock || status=1
+fi
+exit "$status"

@@ -1,0 +1,3 @@
+/starrocks-ldap-test-fe ports={} networks=ranger-test-ipa-net=172.29.252.20 
+/starrocks-ldap-test-be ports={} networks=ranger-test-ipa-net=172.29.252.21 
+/ranger-test-ipa ports={} networks=ranger-test-ipa-net=172.29.252.10 

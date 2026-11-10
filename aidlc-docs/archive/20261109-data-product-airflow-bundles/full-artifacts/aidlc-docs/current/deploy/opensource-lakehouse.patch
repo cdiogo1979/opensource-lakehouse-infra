@@ -1,0 +1,331 @@
+diff --git a/README.md b/README.md
+index 6967760..ec3f00e 100644
+--- a/README.md
++++ b/README.md
+@@ -62,6 +62,10 @@ The Git ref determines which version of DAGs, configs, and Spark code Airflow lo
+ | `lakehouse-dev` | `dev.yml` | `dev-` | Operator-selected feature branch |
+ | `lakehouse-uat` | `uat.yml` | `uat-` | `uat` |
+ | `lakehouse-prod` or `lakehouse-main` | `prod.yml` | `main-` | `main` |
++| `<product>-uat` (data product bundle) | `<product>/uat.yml`, else `uat.yml` | `<product>-uat-` | the product's `uat_branch` |
++| `<product>-main` (data product bundle) | `<product>/prod.yml`, else `prod.yml` | `<product>-main-` | the product's `prod_branch` |
++
++The lakehouse platform creates one `<product>-main` and one `<product>-uat` bundle for every data product whose definition names this repository. Their DAG IDs start with the bundle name (for example `default-main-test_environment`); the platform's token broker derives the product's writer from that prefix and checks with Airflow that the DAG really comes from that bundle, so keep the prefix the factory builds. A product can keep its own settings in `configs/<product>/<env>.yml`; without one it uses the shared file.
+ 
+ Changing the dev tracking ref lets an operator test a feature branch while retaining the dev config and DAG identity. Each DAG run uses its recorded bundle commit so its DAG, config, helpers, and workload code stay aligned. See [AIRFLOW_BUNDLES.md](AIRFLOW_BUNDLES.md) for setup, branch selection, and operational checks.
+ 
+diff --git a/dags/dag_defaults.py b/dags/dag_defaults.py
+index 1f32378..62e87a7 100644
+--- a/dags/dag_defaults.py
++++ b/dags/dag_defaults.py
+@@ -1,5 +1,6 @@
+ """Shared default settings for repository Airflow DAGs."""
+ 
++import re
+ from datetime import datetime
+ from pathlib import Path
+ from typing import Any, Iterable
+@@ -8,18 +9,19 @@ SUPPORTED_ENVIRONMENTS = ("dev", "uat", "prod")
+ MAIN_BUNDLE_NAME = "lakehouse-main"
+ PROD_BUNDLE_NAME = "lakehouse-prod"
+ UAT_BUNDLE_NAME = "lakehouse-uat"
++# Data product bundles from the lakehouse platform: <product>-main and <product>-uat.
++PRODUCT_BUNDLE_PATTERN = re.compile(r"^(?P<product>[a-z][a-z0-9]{1,19})-(?P<branch>main|uat)$")
++LEGACY_PRODUCT_NAMES = ("lakehouse",)
+ 
+ 
+-def identity_for_bundle(dags_dir: Path) -> tuple[str, str]:
+-    """Select the DAG ID prefix and workload environment for a bundle.
++def bundle_name_for(dags_dir: Path) -> str | None:
++    """Return the Airflow bundle name from the checkout path, if it has one.
+ 
+     Args:
+         dags_dir: ``dags/`` directory inside the current bundle checkout.
+ 
+     Returns:
+-        A ``(dag_id_prefix, workload_environment)`` pair: ``("main", "prod")``
+-        for the main bundle, ``("uat", "uat")`` for UAT, and ``("dev", "dev")``
+-        for other bundle names or non-versioned local DAG paths.
++        The bundle name, or ``None`` for non-versioned local DAG paths.
+     """
+     resolved_dags_dir = dags_dir.resolve()
+     tracking_repo_dir = next(
+@@ -34,13 +36,48 @@ def identity_for_bundle(dags_dir: Path) -> tuple[str, str]:
+             None,
+         )
+         if versions_dir is None:
+-            return "dev", "dev"
++            return None
+         bundle_name = versions_dir.parent.name
++    return bundle_name
++
++
++def product_for_bundle(dags_dir: Path) -> str | None:
++    """Return the data product whose bundle holds these DAGs.
++
++    Args:
++        dags_dir: ``dags/`` directory inside the current bundle checkout.
++
++    Returns:
++        The product name for ``<product>-main``/``<product>-uat`` bundles, or
++        ``None`` for legacy ``lakehouse-*`` bundles and local paths.
++    """
++    match = PRODUCT_BUNDLE_PATTERN.fullmatch(bundle_name_for(dags_dir) or "")
++    if match is None or match.group("product") in LEGACY_PRODUCT_NAMES:
++        return None
++    return match.group("product")
+ 
++
++def identity_for_bundle(dags_dir: Path) -> tuple[str, str]:
++    """Select the DAG ID prefix and workload environment for a bundle.
++
++    Args:
++        dags_dir: ``dags/`` directory inside the current bundle checkout.
++
++    Returns:
++        A ``(dag_id_prefix, workload_environment)`` pair: ``("<product>-main",
++        "prod")`` and ``("<product>-uat", "uat")`` for data product bundles, so
++        DAG IDs start with the bundle name the token broker checks;
++        ``("main", "prod")`` and ``("uat", "uat")`` for the legacy
++        ``lakehouse-*`` bundles; and ``("dev", "dev")`` for other bundle names
++        or non-versioned local DAG paths.
++    """
++    bundle_name = bundle_name_for(dags_dir)
+     if bundle_name in (MAIN_BUNDLE_NAME, PROD_BUNDLE_NAME):
+         return "main", "prod"
+     if bundle_name == UAT_BUNDLE_NAME:
+         return "uat", "uat"
++    if product_for_bundle(dags_dir) is not None:
++        return bundle_name, "prod" if bundle_name.endswith("-main") else "uat"
+     return "dev", "dev"
+ 
+ 
+diff --git a/dags/dag_factory.py b/dags/dag_factory.py
+index bb2221a..9c6962c 100644
+--- a/dags/dag_factory.py
++++ b/dags/dag_factory.py
+@@ -21,7 +21,7 @@ from airflow.exceptions import AirflowException
+ from airflow.operators.python import PythonOperator
+ from airflow.utils.trigger_rule import TriggerRule
+ 
+-from dag_defaults import identity_for_bundle, standard_dag_kwargs
++from dag_defaults import identity_for_bundle, product_for_bundle, standard_dag_kwargs
+ from spark_output import redact_spark_output
+ 
+ DAGS_DIR = Path(__file__).resolve().parent
+@@ -40,17 +40,18 @@ class SparkWorkload:
+     runs_after: tuple[str, ...]
+ 
+ 
+-def _validate_environment_config(environment: str, config_dir: str) -> None:
++def _validate_environment_config(environment: str, config_dir: str, product: str | None = None) -> None:
+     """Validate the bundle version's environment YAML before Spark startup.
+ 
+     Args:
+         environment: Environment selected by the current Git bundle name.
+         config_dir: Config directory from the parsed bundle version.
++        product: Data product of the bundle, if any; selects its config folder.
+     """
+     sys.path.insert(0, str(BUNDLE_ROOT / "notebooks" / "common"))
+     from config_loader import load_environment_config
+ 
+-    load_environment_config(environment, config_dir)
++    load_environment_config(environment, config_dir, product)
+ 
+ 
+ def _normalize_workloads(workloads: Sequence[Mapping[str, Any]]) -> tuple[SparkWorkload, ...]:
+@@ -249,6 +250,7 @@ def _create_spark_container(
+     aws_region: str,
+     broker_ca_host_path: str,
+     broker_ca_container_path: str,
++    product: str = "",
+     **context: object,
+ ) -> dict[str, str]:
+     """Start one reusable Spark container and mount the DAG bundle into it.
+@@ -261,6 +263,7 @@ def _create_spark_container(
+         bundle_target: Container path where the bundle is mounted.
+         environment: Selected lakehouse environment.
+         aws_region: AWS-compatible region passed to Spark applications.
++        product: Data product of the bundle (empty for legacy bundles).
+         **context: Airflow task context, including the DAG and run IDs.
+ 
+     Returns:
+@@ -316,6 +319,7 @@ def _create_spark_container(
+                 "SPARK_CONTAINER_ROLE": "driver",
+                 "SPARK_MASTER_HOST": "spark",
+                 "LAKEHOUSE_ENVIRONMENT": environment,
++                "LAKEHOUSE_PRODUCT": product,
+                 "PYTHONPATH": bundle_target,
+             },
+             volumes=volumes,
+@@ -454,6 +458,7 @@ def create_spark_dag(
+     normalized_workloads = _normalize_workloads(workloads)
+ 
+     dag_id_prefix, environment = identity_for_bundle(DAGS_DIR)
++    product = product_for_bundle(DAGS_DIR)
+     workload_names = [workload.task_name for workload in normalized_workloads]
+     spark_job_image = os.environ.get("LAKEHOUSE_SPARK_IMAGE", "airflow-spark-job:3.5.5_1.8.1")
+     spark_master = os.environ.get("LAKEHOUSE_SPARK_MASTER", "local[*]")
+@@ -479,7 +484,7 @@ def create_spark_dag(
+     validate_environment = PythonOperator(
+         task_id="validate_environment",
+         python_callable=_validate_environment_config,
+-        op_kwargs={"environment": environment, "config_dir": str(CONFIG_DIR)},
++        op_kwargs={"environment": environment, "config_dir": str(CONFIG_DIR), "product": product},
+         dag=dag,
+     )
+     create_cluster = PythonOperator(
+@@ -496,6 +501,7 @@ def create_spark_dag(
+             "aws_region": aws_region,
+             "broker_ca_host_path": broker_ca_host_path,
+             "broker_ca_container_path": broker_ca_container_path,
++            "product": product or "",
+         },
+         dag=dag,
+     )
+diff --git a/notebooks/common/config_loader.py b/notebooks/common/config_loader.py
+index 1c24434..69c2d03 100644
+--- a/notebooks/common/config_loader.py
++++ b/notebooks/common/config_loader.py
+@@ -1,5 +1,6 @@
+ """Load and validate environment-specific lakehouse configuration."""
+ 
++import re
+ from dataclasses import dataclass
+ from pathlib import Path
+ from types import MappingProxyType
+@@ -9,6 +10,7 @@ import yaml
+ 
+ SUPPORTED_ENVIRONMENTS = frozenset({"dev", "uat", "prod"})
+ REQUIRED_KEYS = ("storage_path", "database_name")
++PRODUCT_PATTERN = re.compile(r"^[a-z][a-z0-9]{1,19}$")
+ 
+ 
+ @dataclass(frozen=True)
+@@ -98,7 +100,11 @@ def _thaw_yaml_value(value: Any) -> Any:
+     return value
+ 
+ 
+-def load_environment_config(environment: str, config_dir: Optional[Union[str, Path]] = None) -> EnvironmentConfig:
++def load_environment_config(
++    environment: str,
++    config_dir: Optional[Union[str, Path]] = None,
++    product: Optional[str] = None,
++) -> EnvironmentConfig:
+     """Load exactly one environment YAML file and validate its required values.
+ 
+     Args:
+@@ -107,12 +113,14 @@ def load_environment_config(environment: str, config_dir: Optional[Union[str, Pa
+         config_dir: Optional directory containing the environment YAML files.
+             By default, resolves `configs/` from the repository root relative
+             to this module.
++        product: Optional data product name. When given, `<product>/<env>.yml`
++            is used if it exists, otherwise the shared `<env>.yml`.
+ 
+     Returns:
+         An immutable `EnvironmentConfig` populated from the selected file.
+ 
+     Raises:
+-        ValueError: If the environment is unsupported, YAML is malformed, its
++        ValueError: If the environment or product is invalid, YAML is malformed, its
+             root is not a mapping, or a required key is missing or invalid.
+         FileNotFoundError: If the selected environment file does not exist.
+     """
+@@ -120,8 +128,13 @@ def load_environment_config(environment: str, config_dir: Optional[Union[str, Pa
+         supported = ", ".join(sorted(SUPPORTED_ENVIRONMENTS))
+         raise ValueError(f"Unsupported environment {environment!r}; expected one of: {supported}.")
+ 
++    if product is not None and (not isinstance(product, str) or not PRODUCT_PATTERN.fullmatch(product)):
++        raise ValueError(f"Invalid data product name {product!r}.")
++
+     directory = Path(config_dir) if config_dir is not None else Path(__file__).resolve().parents[2] / "configs"
+     config_path = directory / f"{environment}.yml"
++    if product is not None and (directory / product / f"{environment}.yml").is_file():
++        config_path = directory / product / f"{environment}.yml"
+ 
+     try:
+         with config_path.open("r", encoding="utf-8") as config_file:
+diff --git a/notebooks/common/job_runtime.py b/notebooks/common/job_runtime.py
+index 103ec29..3ad1d89 100644
+--- a/notebooks/common/job_runtime.py
++++ b/notebooks/common/job_runtime.py
+@@ -80,7 +80,8 @@ def start_spark_job(app_name: str, argv: Any = None) -> tuple[Any, EnvironmentCo
+         # but the catalog selection is needed before SparkSession startup.
+         # Airflow already mounts the selected Bundle, so use its config folder.
+         config_dir = os.environ.get("LAKEHOUSE_BUNDLE_CONFIG_DIR", "/opt/lakehouse-bundle/configs")
+-    config = load_environment_config(args.environment, config_dir)
++    # Set on the Spark container for data product bundles; selects configs/<product>/ when present.
++    config = load_environment_config(args.environment, config_dir, os.environ.get("LAKEHOUSE_PRODUCT") or None)
+     _select_token_provider()
+ 
+     from pyspark.sql import SparkSession
+diff --git a/tests/workload_foundation/test_product_bundles.py b/tests/workload_foundation/test_product_bundles.py
+new file mode 100644
+index 0000000..b2d7fae
+--- /dev/null
++++ b/tests/workload_foundation/test_product_bundles.py
+@@ -0,0 +1,65 @@
++"""Data product bundles: DAG ID prefixes, environments, and per-product configs."""
++
++import pytest
++from hypothesis import given, settings
++from hypothesis import strategies as st
++
++from config_loader import load_environment_config
++from dag_defaults import identity_for_bundle, product_for_bundle
++
++PRODUCTS = st.from_regex(r"[a-z][a-z0-9]{1,19}", fullmatch=True).filter(lambda name: name != "lakehouse")
++
++
++def bundle_dags(tmp_path, bundle_name, versioned=False):
++    middle = ("versions", "abc123") if versioned else ("tracking_repo",)
++    dags_dir = tmp_path.joinpath("dag_bundles", bundle_name, *middle, "dags")
++    dags_dir.mkdir(parents=True, exist_ok=True)
++    return dags_dir
++
++
++@pytest.mark.parametrize(
++    ("bundle_name", "identity", "product"),
++    [
++        ("default-main", ("default-main", "prod"), "default"),
++        ("default-uat", ("default-uat", "uat"), "default"),
++        ("sales-main", ("sales-main", "prod"), "sales"),
++        ("lakehouse-main", ("main", "prod"), None),
++        ("lakehouse-uat", ("uat", "uat"), None),
++        ("default-dev", ("dev", "dev"), None),
++        ("Sales-main", ("dev", "dev"), None),
++    ],
++)
++def test_product_bundles_prefix_dag_ids_with_the_bundle_name(tmp_path, bundle_name, identity, product):
++    for versioned in (False, True):
++        dags_dir = bundle_dags(tmp_path, bundle_name, versioned)
++        assert identity_for_bundle(dags_dir) == identity
++        assert product_for_bundle(dags_dir) == product
++
++
++@settings(print_blob=True)
++@given(product=PRODUCTS, branch=st.sampled_from(["main", "uat"]))
++def test_every_product_bundle_gives_its_own_prefix(tmp_path_factory, product, branch):
++    dags_dir = bundle_dags(tmp_path_factory.mktemp("bundle"), f"{product}-{branch}")
++    prefix, environment = identity_for_bundle(dags_dir)
++    assert prefix == f"{product}-{branch}" and environment == {"main": "prod", "uat": "uat"}[branch]
++    assert product_for_bundle(dags_dir) == product
++
++
++def write(path, database):
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(f"storage_path: s3a://bucket/{database}/\ndatabase_name: {database}\n", encoding="utf-8")
++
++
++def test_product_config_overrides_the_shared_one_and_falls_back(tmp_path):
++    write(tmp_path / "prod.yml", "shared_db")
++    write(tmp_path / "sales" / "prod.yml", "sales_db")
++    assert load_environment_config("prod", tmp_path, "sales")["database_name"] == "sales_db"
++    assert load_environment_config("prod", tmp_path, "default")["database_name"] == "shared_db"
++    assert load_environment_config("prod", tmp_path)["database_name"] == "shared_db"
++
++
++@pytest.mark.parametrize("product", ["../prod", "Sales", "x", "", "a" * 21])
++def test_invalid_product_names_are_refused(tmp_path, product):
++    write(tmp_path / "prod.yml", "shared_db")
++    with pytest.raises(ValueError, match="data product"):
++        load_environment_config("prod", tmp_path, product)

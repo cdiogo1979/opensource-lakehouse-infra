@@ -1,0 +1,1 @@
+import os, sys; p = os.path.expanduser("~/.local/lakehouse/python3.10"); os.path.isdir(p) and sys.path.append(p)

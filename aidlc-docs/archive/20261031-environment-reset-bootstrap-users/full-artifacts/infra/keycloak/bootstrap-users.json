@@ -1,0 +1,18 @@
+{
+  "default_password": "ChangeM3!",
+  "email_domain": "lakehouse.local",
+  "groups": [
+    "role-default-developer",
+    "role-default-analyst",
+    "role-default-owner",
+    "role-default-writer",
+    "role-platform-admin"
+  ],
+  "users": [
+    {"username": "joe-developer", "group": "role-default-developer", "firstName": "Joe", "lastName": "Developer"},
+    {"username": "peter-analyst", "group": "role-default-analyst", "firstName": "Peter", "lastName": "Analyst"},
+    {"username": "maria-owner", "group": "role-default-owner", "firstName": "Maria", "lastName": "Owner"},
+    {"username": "srv-default-writer", "group": "role-default-writer", "firstName": "Default", "lastName": "Writer"},
+    {"username": "platform-admin", "group": "role-platform-admin", "firstName": "Platform", "lastName": "Admin"}
+  ]
+}

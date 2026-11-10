@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "policy_version": "2026-10-27.1",
+  "buckets": ["lake", "lake-dev", "lake-uat"],
+  "roles": [
+    {
+      "group": "lakehouse-developers",
+      "policy": "lakehouse-developers",
+      "members": ["developer-user"],
+      "read_buckets": ["lake", "lake-dev", "lake-uat"],
+      "write_buckets": ["lake-dev"]
+    },
+    {
+      "group": "lakehouse-analysts",
+      "policy": "lakehouse-analysts",
+      "members": ["analyst-user"],
+      "read_buckets": ["lake"],
+      "write_buckets": []
+    },
+    {
+      "group": "lakehouse-writers",
+      "policy": "lakehouse-writers",
+      "members": ["write-service-account"],
+      "read_buckets": ["lake", "lake-dev", "lake-uat"],
+      "write_buckets": ["lake", "lake-dev", "lake-uat"]
+    }
+  ],
+  "preserved_users": ["admin", "user_a", "user_b"],
+  "legacy_writer_policy": "lakehouse-writer"
+}

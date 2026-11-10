@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+"""Headless Jenkins Keycloak SSO and permission matrix check with temporary users.
+
+Usage: python3 -I e2e_jenkins_oidc.py <repo-root>
+Never prints secrets. Always deletes the temporary Keycloak users.
+"""
+
+import html
+import http.cookiejar
+import importlib.util
+import json
+import os
+import re
+import secrets
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+REPO = sys.argv[1]
+sys.argv = ["x", REPO]
+spec = importlib.util.spec_from_file_location("e2e", os.path.join(os.path.dirname(os.path.abspath(__file__)), "e2e_rustfs_oidc_login.py"))
+e = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(e)  # reuses Keycloak admin helpers and the keycloak.localhost resolver shim
+
+J = "http://127.0.0.1:8090"
+JOB = "/job/opensource-lakehouse-dp/job/opensource-lakehouse-ci/job/main"
+UAT = "/job/opensource-lakehouse-dp/job/opensource-lakehouse-ci/job/uat"
+
+
+class Session:
+    def __init__(self):
+        self.jar = http.cookiejar.CookieJar()
+        self.opener = urllib.request.build_opener(e.NoRedirect, urllib.request.HTTPCookieProcessor(self.jar))
+
+    def call(self, method, url, data=None, headers=None):
+        for cookie in self.jar:
+            cookie.secure = False  # browsers treat http://*.localhost and 127.0.0.1 as secure contexts
+        return e.call(self.opener, method, url, data, headers)
+
+    def crumb_headers(self):
+        status, _, body = self.call("GET", f"{J}/crumbIssuer/api/json")
+        if status != 200:
+            return {}
+        data = json.loads(body)
+        return {data["crumbRequestField"]: data["crumb"]}
+
+
+def oidc_login(username, password):
+    s = Session()
+    status, headers, _ = s.call("GET", f"{J}/securityRealm/commenceLogin?from=%2F")
+    assert status == 302, f"commenceLogin HTTP {status}"
+    status, headers, body = s.call("GET", e.location(headers))
+    assert status == 200, f"Keycloak login page HTTP {status}"
+    action = re.search(rb'<form[^>]*id="kc-form-login"[^>]*action="([^"]+)"', body)
+    assert action, "Keycloak login form not found"
+    form = urllib.parse.urlencode({"username": username, "password": password, "credentialId": ""}).encode()
+    status, headers, _ = s.call("POST", html.unescape(action.group(1).decode()), form, {"Content-Type": "application/x-www-form-urlencoded"})
+    callback = e.location(headers)
+    assert status == 302 and callback.startswith(f"{J}/securityRealm/finishLogin?"), f"no Jenkins callback (HTTP {status})"
+    status, headers, _ = s.call("GET", callback)
+    assert status in (302, 303), f"finishLogin HTTP {status}"
+    return s
+
+
+def who(s):
+    status, _, body = s.call("GET", f"{J}/whoAmI/api/json")
+    return json.loads(body) if status == 200 else {"status": status}
+
+
+def check(label, actual, expected, results):
+    ok = actual in expected if isinstance(expected, tuple) else actual == expected
+    results.append(ok)
+    print(f"{'PASS' if ok else 'FAIL'} {label}: got {actual}")
+
+
+def main():
+    token = e.admin_token()
+    suffix = secrets.token_hex(3)
+    groups = {"owner": "role-default-owner", "developer": "role-default-developer", "analyst": "role-default-analyst",
+              "writer": "role-default-writer", "nogroup": None}
+    users = {role: (f"jenkins-e2e-{role}-{suffix}", secrets.token_urlsafe(18)) for role in groups}
+    created, results, queued = [], [], None
+    try:
+        for role, (name, password) in users.items():
+            created.append(e.create_user(token, name, password, groups[role]))
+        sessions = {role: oidc_login(*users[role]) for role in users}
+
+        for role in users:
+            me = who(sessions[role])
+            check(f"{role} authenticated as its Keycloak user", me.get("name") == users[role][0] and me.get("authenticated") is True, True, results)
+        check("owner has the owner group authority", "role-default-owner" in who(sessions["owner"]).get("authorities", []), True, results)
+
+        for role, expected in (("owner", 200), ("developer", 200), ("analyst", 200), ("writer", 403), ("nogroup", 403)):
+            check(f"{role} Overall/Read (GET /api/json)", sessions[role].call("GET", f"{J}/api/json")[0], expected, results)
+        for role, expected in (("owner", 200), ("developer", 403), ("analyst", 403)):
+            check(f"{role} administration (GET /manage/)", sessions[role].call("GET", f"{J}/manage/")[0], expected, results)
+        for role, expected in (("developer", 200), ("analyst", 200), ("writer", 403)):
+            check(f"{role} Job/Read on main", sessions[role].call("GET", f"{J}{JOB}/api/json")[0], expected, results)
+
+        analyst = sessions["analyst"]
+        check("analyst cannot trigger a build", analyst.call("POST", f"{J}{JOB}/build", b"", analyst.crumb_headers())[0], 403, results)
+        developer = sessions["developer"]
+        status, headers, _ = developer.call("POST", f"{J}{UAT}/build", b"", developer.crumb_headers())
+        check("developer triggers the workload CI build (uat)", status, 201, results)
+        queued = e.location(headers)
+
+        hatch = Session()
+        status, _, body = hatch.call("GET", f"{J}/login")
+        crumb = re.search(rb'name="Jenkins-Crumb"[^>]*value="([^"]+)"', body)
+        password = open(os.path.join(REPO, ".runtime/credentials/jenkins-break-glass-password")).read().strip()
+        form = {"j_username": "jenkins-break-glass", "j_password": password, "from": "/"}
+        if crumb:
+            form["Jenkins-Crumb"] = crumb.group(1).decode()
+        hatch.call("POST", f"{J}/securityRealm/escapeHatch", urllib.parse.urlencode(form).encode(), {"Content-Type": "application/x-www-form-urlencoded"})
+        check("break-glass is authenticated as jenkins-break-glass", who(hatch).get("name"), "jenkins-break-glass", results)
+        check("break-glass escape hatch grants administration", hatch.call("GET", f"{J}/manage/")[0], 200, results)
+
+        status, headers, _ = sessions["analyst"].call("GET", f"{J}/logout")
+        end_session = e.location(headers)
+        check("logout redirects to Keycloak end-session", status in (302, 303) and "/protocol/openid-connect/logout" in end_session, True, results)
+
+        build_url, result = None, None
+        deadline = time.time() + 900
+        while time.time() < deadline:
+            status, _, body = developer.call("GET", f"{queued}api/json")
+            if status == 200:
+                item = json.loads(body)
+                if item.get("executable"):
+                    build_url = item["executable"]["url"].replace("http://127.0.0.1:8090", J)
+                    break
+            time.sleep(5)
+        while build_url and time.time() < deadline:
+            status, _, body = developer.call("GET", f"{build_url}api/json?tree=number,result,building,duration")
+            data = json.loads(body) if status == 200 else {}
+            if data and not data.get("building"):
+                result = data.get("result")
+                print(f"INFO build #{data.get('number')} finished in {int(data.get('duration', 0)) // 1000}s")
+                break
+            time.sleep(10)
+        check("workload CI build on uat succeeds", result, "SUCCESS", results)
+    finally:
+        token = e.admin_token()
+        for user_id in created:
+            print("cleanup temporary user:", e.kc_admin(token, "DELETE", f"/users/{user_id}")[0])
+    print("E2E " + ("passed" if results and all(results) else "failed") + f" ({sum(results)}/{len(results)})")
+    return 0 if results and all(results) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

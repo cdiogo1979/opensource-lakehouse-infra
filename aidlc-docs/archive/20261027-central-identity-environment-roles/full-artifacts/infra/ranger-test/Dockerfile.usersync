@@ -1,0 +1,19 @@
+FROM apache/ranger@sha256:f55eb8b17df1ff68e7cec47d51a50cfc5b09806ae5b22c1ea62407bd0d0fdea7
+
+# Apache publishes Ranger components as versioned binary service artifacts.
+# Keep the downloaded release checksum-pinned and do not vendor its archive.
+
+USER root
+ARG RANGER_USERSYNC_SHA512=7f47b63ed2a7f48d4e2fd876b4a04a65370f6270ab3893eb0670f40a5f47f0612c3b244318a9aa65ba9bf759903df5fa2c6b3f113b357d66fe7880d706cc0898
+RUN curl --fail --location --silent --show-error \
+      https://downloads.apache.org/ranger/2.9.0/services/usersync/ranger-2.9.0-usersync.tar.gz \
+      -o /tmp/ranger-usersync.tar.gz \
+    && echo "${RANGER_USERSYNC_SHA512}  /tmp/ranger-usersync.tar.gz" | sha512sum -c - \
+    && mkdir -p /opt/ranger \
+    && tar -xzf /tmp/ranger-usersync.tar.gz --strip-components=1 -C /opt/ranger \
+    && rm /tmp/ranger-usersync.tar.gz \
+    && chmod 0755 /opt/ranger/setup.sh /opt/ranger/set_globals.sh /opt/ranger/setup.py /opt/ranger/ranger-usersync-services.sh
+
+COPY ranger-usersync-entrypoint.sh /usr/local/sbin/ranger-usersync-entrypoint
+RUN chmod 0755 /usr/local/sbin/ranger-usersync-entrypoint
+ENTRYPOINT ["/usr/local/sbin/ranger-usersync-entrypoint"]

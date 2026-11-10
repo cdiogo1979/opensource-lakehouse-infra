@@ -1,0 +1,105 @@
+# Optional production FreeIPA/StarRocks LDAP integration.
+# This file is intentionally excluded from the default Compose invocation.
+# Review the resulting diff and schedule the FE recreation before using it.
+services:
+  freeipa-production:
+    profiles: [freeipa-production]
+    build:
+      context: ./infra/freeipa
+      dockerfile: Dockerfile
+    image: local/freeipa-server:4.13.4-almalinux-9-nssfix
+    container_name: iceberg-poc-freeipa-production
+    hostname: ${FREEIPA_PRODUCTION_HOSTNAME:-ipa-prod.lakehouse.local}
+    cgroup: host
+    environment:
+      KERBEROS_REALM: ${KERBEROS_REALM:-LAKEHOUSE.LOCAL}
+      FREEIPA_HOSTNAME: ${FREEIPA_PRODUCTION_HOSTNAME:-ipa-prod.lakehouse.local}
+      FREEIPA_UI_PORT: "8444"
+      IPA_SERVER_IP: ${FREEIPA_PRODUCTION_IP:-172.31.250.10}
+    secrets:
+      - source: freeipa-production-server-install-options
+        target: /run/secrets/freeipa-server-install-options
+        mode: 0400
+      - source: freeipa-production-admin-password
+        target: /run/secrets/freeipa-admin-password
+        mode: 0400
+      - source: freeipa-production-starrocks-reader-password
+        target: /run/secrets/freeipa-starrocks-reader-password
+        mode: 0400
+      - source: freeipa-production-writer-password
+        target: /run/secrets/freeipa-writer-password
+        mode: 0400
+    volumes:
+      - freeipa-production-data:/data
+      - ./infra/freeipa/entrypoint.sh:/usr/local/sbin/freeipa-entrypoint:ro
+      - ./infra/freeipa/bootstrap-identities.sh:/usr/local/sbin/freeipa-bootstrap-identities:ro
+      - ./infra/freeipa/set-role-membership.sh:/usr/local/sbin/freeipa-set-role-membership:ro
+      - ./infra/freeipa/readiness.sh:/usr/local/sbin/freeipa-readiness:ro
+      - ./infra/freeipa/patch-httpd-redirects.py:/usr/local/sbin/patch-httpd-redirects.py:ro
+      - ./infra/freeipa/bootstrap-starrocks-production-identities.sh:/usr/local/sbin/bootstrap-starrocks-production-identities:ro
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    entrypoint: ["/bin/bash", "/usr/local/sbin/freeipa-entrypoint"]
+    ports:
+      - "127.0.0.1:8444:443"
+    networks:
+      freeipa_production_net:
+        ipv4_address: ${FREEIPA_PRODUCTION_IP:-172.31.250.10}
+        aliases:
+          - ${FREEIPA_PRODUCTION_HOSTNAME:-ipa-prod.lakehouse.local}
+    healthcheck:
+      test: ["CMD", "/usr/local/sbin/freeipa-readiness"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 10m
+    restart: unless-stopped
+
+  starrocks-fe:
+    environment:
+      STARROCKS_LDAP_SERVER_HOST: ${FREEIPA_PRODUCTION_HOSTNAME:-ipa-prod.lakehouse.local}
+      STARROCKS_LDAP_SERVER_PORT: "636"
+      STARROCKS_LDAP_BIND_DN_PATTERN: "uid=$${USER},cn=users,cn=accounts,dc=lakehouse,dc=local"
+    volumes:
+      - type: bind
+        source: ./.runtime/freeipa-production/ca.crt
+        target: /run/ldap/freeipa-production-ca.crt
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./.runtime/starrocks-production/sql-tls/starrocks-production.jks
+        target: /run/sql-tls/starrocks-production.jks
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./.runtime/starrocks-production/sql-tls/keystore-password
+        target: /run/sql-tls/keystore-password
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      - iceberg_net
+      - freeipa_production_net
+
+networks:
+  freeipa_production_net:
+    name: iceberg-poc-freeipa-production-net
+    internal: true
+    ipam:
+      config:
+        - subnet: ${FREEIPA_PRODUCTION_SUBNET:-172.31.250.0/24}
+
+volumes:
+  freeipa-production-data:
+    name: iceberg-poc-freeipa-production-data
+
+secrets:
+  freeipa-production-server-install-options:
+    file: ./.runtime/credentials/freeipa-production-server-install-options
+  freeipa-production-admin-password:
+    file: ./.runtime/credentials/freeipa-production-admin-password
+  freeipa-production-starrocks-reader-password:
+    file: ./.runtime/credentials/freeipa-production-starrocks-reader-password
+  freeipa-production-writer-password:
+    file: ./.runtime/credentials/freeipa-production-writer-password

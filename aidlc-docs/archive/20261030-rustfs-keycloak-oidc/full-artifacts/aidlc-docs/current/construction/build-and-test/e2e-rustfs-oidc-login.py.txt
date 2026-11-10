@@ -1,0 +1,211 @@
+#!/usr/bin/env python3
+"""Headless RustFS console OIDC login check with temporary Keycloak users.
+
+Usage: python3 e2e_rustfs_oidc_login.py <repo-root>
+Creates temporary users (analyst, developer, no-group), drives the real
+authorize -> Keycloak login -> RustFS callback flow, checks S3 permissions of
+the issued session, tests logout redirect acceptance, and always deletes the
+temporary users and probe objects. Never prints secrets or tokens.
+"""
+
+import datetime as dt
+import hashlib
+import hmac
+import html
+import http.cookiejar
+import json
+import re
+import secrets
+import socket
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+ROOT = Path(sys.argv[1]).resolve()
+REALM = "lakehouse"
+KC = "http://127.0.0.1:8080"
+CONSOLE = "http://127.0.0.1:9001"
+S3 = "http://127.0.0.1:9000"
+
+_real_getaddrinfo = socket.getaddrinfo
+
+
+def _getaddrinfo(host, *args, **kwargs):
+    return _real_getaddrinfo("127.0.0.1" if host == "keycloak.localhost" else host, *args, **kwargs)
+
+
+socket.getaddrinfo = _getaddrinfo
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def call(opener, method, url, data=None, headers=None):
+    request = urllib.request.Request(url, data=data, method=method, headers=headers or {})
+    try:
+        with opener.open(request, timeout=15) as response:
+            return response.status, dict(response.headers), response.read()
+    except urllib.error.HTTPError as error:
+        return error.code, dict(error.headers), error.read()
+
+
+def location(headers):
+    return headers.get("Location") or headers.get("location") or ""
+
+
+plain = urllib.request.build_opener(NoRedirect)
+
+
+def admin_token():
+    password = (ROOT / ".runtime/credentials/keycloak-admin-password").read_text().strip()
+    form = urllib.parse.urlencode({"grant_type": "password", "client_id": "admin-cli", "username": "admin", "password": password}).encode()
+    status, _, body = call(plain, "POST", f"{KC}/realms/master/protocol/openid-connect/token", form,
+                           {"Content-Type": "application/x-www-form-urlencoded"})
+    assert status == 200, f"admin token HTTP {status}"
+    return json.loads(body)["access_token"]
+
+
+def kc_admin(token, method, path, payload=None):
+    data = json.dumps(payload).encode() if payload is not None else None
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    return call(plain, method, f"{KC}/admin/realms/{REALM}{path}", data, headers)
+
+
+def create_user(token, username, password, group):
+    status, headers, _ = kc_admin(token, "POST", "/users", {
+        "username": username, "enabled": True, "email": f"{username}@example.invalid", "emailVerified": True,
+        "firstName": "RustFS", "lastName": "E2E",
+        "credentials": [{"type": "password", "value": password, "temporary": False}],
+    })
+    assert status == 201, f"create user HTTP {status}"
+    user_id = location(headers).rsplit("/", 1)[1]
+    if group:
+        status, _, body = kc_admin(token, "GET", f"/groups?search={group}&exact=true")
+        group_id = next(item["id"] for item in json.loads(body) if item["name"] == group)
+        status, _, _ = kc_admin(token, "PUT", f"/users/{user_id}/groups/{group_id}")
+        assert status == 204, f"group membership HTTP {status}"
+    return user_id
+
+
+def login(username, password, host="127.0.0.1"):
+    """Return (result, details) where result is 'session' or 'refused'."""
+    jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(NoRedirect, urllib.request.HTTPCookieProcessor(jar))
+    status, headers, _ = call(opener, "GET", f"http://{host}:9001/rustfs/admin/v3/oidc/authorize/default")
+    assert status == 302, f"authorize HTTP {status}"
+    status, headers, body = call(opener, "GET", location(headers))
+    assert status == 200, f"Keycloak login page HTTP {status}"
+    # Browsers treat http://*.localhost as a secure context and send Secure
+    # cookies; Python's cookie jar does not, so emulate the browser here.
+    for cookie in jar:
+        cookie.secure = False
+    action =re.search(rb'<form[^>]*id="kc-form-login"[^>]*action="([^"]+)"', body)
+    assert action, "Keycloak login form not found"
+    form = urllib.parse.urlencode({"username": username, "password": password, "credentialId": ""}).encode()
+    status, headers, _ = call(opener, "POST", html.unescape(action.group(1).decode()), form,
+                              {"Content-Type": "application/x-www-form-urlencoded"})
+    callback = location(headers)
+    assert status == 302 and callback.startswith(f"http://{host}:9001/rustfs/admin/v3/oidc/callback/default?"), \
+        f"Keycloak did not return to the RustFS callback (HTTP {status})"
+    status, headers, body = call(opener, "GET", callback)
+    target = location(headers)
+    if status == 302 and "/rustfs/console/auth/oidc-callback/#" in target:
+        fragment = urllib.parse.parse_qs(target.split("#", 1)[1])
+        return "session", {key: values[0] for key, values in fragment.items()}
+    return "refused", {"status": status, "has_message": b"OIDC policy mapping did not resolve" in body}
+
+
+def s3(creds, method, path, query="", body=b""):
+    now = dt.datetime.now(dt.timezone.utc)
+    amz_date, date = now.strftime("%Y%m%dT%H%M%SZ"), now.strftime("%Y%m%d")
+    payload_hash = hashlib.sha256(body).hexdigest()
+    headers = {"host": "127.0.0.1:9000", "x-amz-content-sha256": payload_hash, "x-amz-date": amz_date,
+               "x-amz-security-token": creds["sessionToken"]}
+    signed = ";".join(sorted(headers))
+    canonical = f"{method}\n{path}\n{query}\n" + "".join(f"{k}:{headers[k]}\n" for k in sorted(headers)) + f"\n{signed}\n{payload_hash}"
+    scope = f"{date}/us-east-1/s3/aws4_request"
+    to_sign = f"AWS4-HMAC-SHA256\n{amz_date}\n{scope}\n{hashlib.sha256(canonical.encode()).hexdigest()}"
+    key = ("AWS4" + creds["secretKey"]).encode()
+    for part in (date, "us-east-1", "s3", "aws4_request"):
+        key = hmac.new(key, part.encode(), hashlib.sha256).digest()
+    signature = hmac.new(key, to_sign.encode(), hashlib.sha256).hexdigest()
+    headers["authorization"] = f"AWS4-HMAC-SHA256 Credential={creds['accessKey']}/{scope}, SignedHeaders={signed}, Signature={signature}"
+    url = f"{S3}{path}" + (f"?{query}" if query else "")
+    return call(plain, method, url, body or None, headers)[0]
+
+
+def check(label, actual, expected, results):
+    ok = actual in expected if isinstance(expected, tuple) else actual == expected
+    results.append(ok)
+    print(f"{'PASS' if ok else 'FAIL'} {label}: got {actual}")
+
+
+def main():
+    token = admin_token()
+    suffix = secrets.token_hex(3)
+    users = {
+        "analyst": (f"rustfs-e2e-analyst-{suffix}", "role-default-analyst"),
+        "developer": (f"rustfs-e2e-developer-{suffix}", "role-default-developer"),
+        "nogroup": (f"rustfs-e2e-nogroup-{suffix}", None),
+    }
+    passwords = {role: secrets.token_urlsafe(18) for role in users}
+    created, results, probes = [], [], []
+    try:
+        for role, (username, group) in users.items():
+            created.append(create_user(token, username, passwords[role], group))
+
+        outcome, analyst = login(users["analyst"][0], passwords["analyst"])
+        check("analyst login yields a console session", outcome, "session", results)
+        if outcome == "session":
+            check("analyst lists buckets", s3(analyst, "GET", "/"), 200, results)
+            check("analyst reads production", s3(analyst, "GET", "/bucket-default", "list-type=2"), 200, results)
+            check("analyst console policy-status read allowed", s3(analyst, "GET", "/bucket-default", "policyStatus="), (200, 404), results)
+            check("analyst console versioning read allowed", s3(analyst, "GET", "/bucket-default", "versioning="), 200, results)
+            check("analyst UAT policy-status denied", s3(analyst, "GET", "/bucket-default-uat", "policyStatus="), 403, results)
+            check("analyst write to production denied", s3(analyst, "PUT", f"/bucket-default/rustfs-e2e-{suffix}", body=b"x"), 403, results)
+            check("analyst UAT read denied", s3(analyst, "GET", "/bucket-default-uat", "list-type=2"), 403, results)
+            check("analyst dev read denied", s3(analyst, "GET", "/bucket-default-dev", "list-type=2"), 403, results)
+            logout_token = analyst.get("logoutToken") or analyst.get("logout_token")
+            if logout_token:
+                status, headers, _ = call(plain, "GET", f"{CONSOLE}/rustfs/admin/v3/oidc/logout?logout_token={urllib.parse.quote(logout_token)}")
+                end_session = location(headers)
+                check("logout redirects to Keycloak end-session", status == 302 and "/protocol/openid-connect/logout" in end_session, True, results)
+                status, headers, _ = call(plain, "GET", end_session)
+                check("Keycloak accepts the post-logout redirect", (status, location(headers).endswith("/rustfs/console/auth/login")), ((302, True), (200, False)), results)
+            else:
+                print("INFO no logout token in the console fragment; logout redirect not exercised")
+
+        outcome, developer = login(users["developer"][0], passwords["developer"], host="localhost")
+        check("developer login via localhost yields a session", outcome, "session", results)
+        if outcome == "session":
+            key = f"/bucket-default-dev/rustfs-e2e-{suffix}"
+            status = s3(developer, "PUT", key, body=b"probe")
+            check("developer writes dev", status, 200, results)
+            if status == 200:
+                probes.append((developer, key))
+            check("developer reads UAT", s3(developer, "GET", "/bucket-default-uat", "list-type=2"), 200, results)
+            for bucket in ("bucket-default", "bucket-default-uat", "bucket-default-dev"):
+                check(f"developer console policy-status read on {bucket}", s3(developer, "GET", f"/{bucket}", "policyStatus="), (200, 404), results)
+            check("developer write to production denied", s3(developer, "PUT", f"/bucket-default/rustfs-e2e-{suffix}", body=b"x"), 403, results)
+
+        outcome, details = login(users["nogroup"][0], passwords["nogroup"])
+        check("user without a product group is refused", outcome, "refused", results)
+        if outcome == "refused":
+            print(f"INFO refusal HTTP {details['status']}; policy-mapping message present: {details['has_message']}")
+    finally:
+        for creds, key in probes:
+            print(f"cleanup probe object: HTTP {s3(creds, 'DELETE', key)}")
+        token = admin_token()
+        for user_id in created:
+            status, _, _ = kc_admin(token, "DELETE", f"/users/{user_id}")
+            print(f"cleanup temporary user: HTTP {status}")
+    print("E2E " + ("passed" if results and all(results) else "failed") + f" ({sum(results)}/{len(results)})")
+    return 0 if results and all(results) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

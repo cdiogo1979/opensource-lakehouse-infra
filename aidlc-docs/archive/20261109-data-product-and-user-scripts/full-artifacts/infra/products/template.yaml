@@ -1,0 +1,46 @@
+# Data product configuration. Created by `create-data-product.sh --init {name}`
+# and applied by `create-data-product.sh data-products/{name}.yaml`.
+# Names (namespaces, buckets, MV databases, groups, writer user) are locked once
+# applied; access levels and app mappings may be changed and reapplied.
+apiVersion: lakehouse.local/v1
+name: {name}
+description: The {name} data product
+# Every environment uses its shared Polaris catalog; the product owns the
+# namespace, the bucket, and the StarRocks materialized-view database.
+environments:
+  prod: {catalog: lakehouse, namespace: {name}_lh, bucket: bucket-{name}, mv_database: {name}_lh}
+  uat: {catalog: lakehouse_uat, namespace: {name}_lhuat, bucket: bucket-{name}-uat, mv_database: {name}_lhuat}
+  dev: {catalog: lakehouse_dev, namespace: {name}_lhdev, bucket: bucket-{name}-dev, mv_database: {name}_lhdev}
+# Keycloak groups; names must match role-<token>-<role>.
+groups:
+  owner: role-{name}-owner
+  developer: role-{name}-developer
+  analyst: role-{name}-analyst
+  writer: role-{name}-writer
+# Data access per role and environment (none, read, write, manage), applied to
+# the Polaris namespaces, the StarRocks databases, and the RustFS buckets.
+access:
+  owner: {prod: manage, uat: manage, dev: manage}
+  developer: {prod: read, uat: read, dev: write}
+  analyst: {prod: read, uat: none, dev: none}
+  writer: {prod: write, uat: write, dev: write}
+# StarRocks materialized-view databases (none, read, author, manage).
+materialized_views:
+  owner: {prod: manage, uat: manage, dev: manage}
+  developer: {prod: read, uat: read, dev: author}
+  analyst: {prod: read, uat: none, dev: none}
+  writer: {prod: author, uat: author, dev: author}
+# Application access. Airflow and Jenkins have no per-product permissions, so
+# these rights apply platform-wide.
+apps:
+  jupyterhub: [developer, analyst]
+  airflow: {owner: Admin, developer: User, analyst: User, writer: Viewer}
+  jenkins:
+    owner: [Overall/Administer]
+    developer: [Overall/Read, Job/Read, Job/Build, Job/Cancel, Job/Workspace]
+    analyst: [Overall/Read, Job/Read]
+# Service user for the product's workloads; its password file is written when
+# the user is created (default password ChangeM3!) and never reset afterwards.
+writer_user:
+  username: srv-{name}-writer
+  password_file: .runtime/credentials/srv-{name}-writer-password

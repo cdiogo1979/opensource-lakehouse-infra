@@ -1,0 +1,10 @@
+FROM apache/ranger@sha256:f55eb8b17df1ff68e7cec47d51a50cfc5b09806ae5b22c1ea62407bd0d0fdea7
+
+USER root
+COPY ranger-admin-entrypoint.sh /usr/local/sbin/ranger-test-admin-entrypoint
+COPY patch-ranger-admin-python-compat.py /usr/local/sbin/patch-ranger-admin-python-compat.py
+RUN chmod 0755 /usr/local/sbin/ranger-test-admin-entrypoint \
+    && python3 /usr/local/sbin/patch-ranger-admin-python-compat.py \
+    && mkdir -p /var/lib/ranger-test-state \
+    && chown ranger:ranger /var/lib/ranger-test-state
+ENTRYPOINT ["/usr/local/sbin/ranger-test-admin-entrypoint"]

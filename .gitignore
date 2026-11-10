@@ -1,0 +1,16 @@
+# Local runtime credentials and generated state
+.runtime/
+.env
+*.keytab
+*.jceks
+*.log
+
+# Python and local tooling artifacts
+__pycache__/
+*.py[cod]
+.DS_Store
+.pytest_cache/
+.hypothesis/
+
+# Generated TPC-H test data (about 1 GB; above GitHub file limits)
+aidlc-docs/archive/20261023-hive-dremio-kerberos/full-artifacts/tpch/data/

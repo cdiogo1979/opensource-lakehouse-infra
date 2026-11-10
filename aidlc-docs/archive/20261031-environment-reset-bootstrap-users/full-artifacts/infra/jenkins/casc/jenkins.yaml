@@ -1,0 +1,66 @@
+# Security configuration for the migrated Jenkins, reapplied at every start.
+# Jobs, build history, and other migrated settings are deliberately not managed
+# here. Secrets are read from read-only mounted files and never written inline.
+jenkins:
+  numExecutors: 2
+  mode: NORMAL
+  crumbIssuer: standard
+  securityRealm:
+    oic:
+      serverConfiguration:
+        manual:
+          # Browsers use the host-reachable issuer name; Jenkins uses the
+          # Compose service name, because keycloak.localhost is loopback inside containers.
+          authorizationServerUrl: "http://keycloak.localhost:8080/realms/lakehouse/protocol/openid-connect/auth"
+          endSessionUrl: "http://keycloak.localhost:8080/realms/lakehouse/protocol/openid-connect/logout"
+          tokenServerUrl: "http://keycloak:8080/realms/lakehouse/protocol/openid-connect/token"
+          jwksServerUrl: "http://keycloak:8080/realms/lakehouse/protocol/openid-connect/certs"
+          userInfoServerUrl: "http://keycloak:8080/realms/lakehouse/protocol/openid-connect/userinfo"
+          issuer: "http://keycloak.localhost:8080/realms/lakehouse"
+          scopes: "openid profile email"
+      clientId: "jenkins"
+      clientSecret: "${trim:${readFile:/run/secrets/jenkins_oidc_client_secret}}"
+      userNameField: "preferred_username"
+      fullNameFieldName: "name"
+      emailFieldName: "email"
+      groupsFieldName: "groups"
+      logoutFromOpenidProvider: true
+      postLogoutRedirectUrl: "http://127.0.0.1:${JENKINS_HOST_PORT}/"
+      rootURLFromRequest: true
+      properties:
+        - "pkce"
+        - escapeHatch:
+            username: "jenkins-break-glass"
+            group: "jenkins-break-glass"
+            secret: "${trim:${readFile:/run/secrets/jenkins_break_glass_password}}"
+  authorizationStrategy:
+    globalMatrix:
+      entries:
+        - group:
+            name: "role-default-owner"
+            permissions:
+              - "Overall/Administer"
+        - group:
+            name: "role-platform-admin"
+            permissions:
+              - "Overall/Administer"
+        - group:
+            name: "jenkins-break-glass"
+            permissions:
+              - "Overall/Administer"
+        - group:
+            name: "role-default-developer"
+            permissions:
+              - "Overall/Read"
+              - "Job/Read"
+              - "Job/Build"
+              - "Job/Cancel"
+              - "Job/Workspace"
+        - group:
+            name: "role-default-analyst"
+            permissions:
+              - "Overall/Read"
+              - "Job/Read"
+unclassified:
+  location:
+    url: "http://127.0.0.1:${JENKINS_HOST_PORT}/"

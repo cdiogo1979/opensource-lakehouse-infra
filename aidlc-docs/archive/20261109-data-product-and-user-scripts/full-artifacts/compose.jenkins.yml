@@ -1,0 +1,37 @@
+# Jenkins module: CI for the workload repository with Keycloak SSO. Used together
+# with compose.core.yml (core network, Keycloak) by scripts/lakehouse.sh unless
+# JENKINS_ENABLED=false.
+services:
+  jenkins:
+    image: local/lakehouse-jenkins:2.580.1
+    build:
+      context: ./infra/jenkins
+      dockerfile: Dockerfile
+    environment:
+      CASC_JENKINS_CONFIG: /var/jenkins_casc/jenkins.yaml
+      PLUGINS_FORCE_UPGRADE: "true"
+      JAVA_OPTS: -Djenkins.install.runSetupWizard=false
+      JENKINS_HOST_PORT: ${JENKINS_HOST_PORT:-8090}
+    ports:
+      - 127.0.0.1:${JENKINS_HOST_PORT:-8090}:8080
+    volumes:
+      - jenkins-home:/var/jenkins_home
+      # Rendered from infra/jenkins/casc/jenkins.yaml and the data product files.
+      - ./.runtime/container-mounts/jenkins-casc.yaml:/var/jenkins_casc/jenkins.yaml:ro
+      - ./.runtime/container-mounts/jenkins-oidc-client-secret:/run/secrets/jenkins_oidc_client_secret:ro
+      - ./.runtime/container-mounts/jenkins-break-glass-password:/run/secrets/jenkins_break_glass_password:ro
+    networks: [core]
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD-SHELL, 'curl --connect-timeout 2 --max-time 4 -fsS http://127.0.0.1:8080/login >/dev/null']
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
+    restart: on-failure:3
+
+volumes:
+  jenkins-home:
+    name: lakehouse-local_jenkins-home

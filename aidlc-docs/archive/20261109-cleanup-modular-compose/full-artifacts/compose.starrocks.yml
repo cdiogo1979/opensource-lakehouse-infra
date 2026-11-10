@@ -1,0 +1,60 @@
+# StarRocks module: SQL engine. Used together with compose.core.yml (project
+# lakehouse-local) by scripts/lakehouse.sh unless STARROCKS_ENABLED=false.
+# No secret values live here: infra/starrocks/bootstrap-starrocks.py applies the
+# root password and the srv-starrocks catalog secret, and the SQL TLS keystore and
+# its password are mounted read-only from files made by
+# scripts/setup/prepare-starrocks-certificates.py.
+x-starrocks-health: &starrocks-health
+  interval: 10s
+  timeout: 5s
+  retries: 60
+  start_period: 30s
+
+services:
+  starrocks-fe:
+    image: starrocks/fe-ubuntu:4.1.7@sha256:f6dd1491f0dd9bdcaeb29fac53c49727b20603d708530f0e5156cfd501425462
+    # The entrypoint adds the TLS keystore settings to the tracked fe.conf.
+    entrypoint: [/usr/bin/tini-static, --, /opt/lakehouse/fe-entrypoint.sh]
+    hostname: starrocks-fe
+    ports:
+      - 127.0.0.1:${STARROCKS_QUERY_PORT:-9030}:9030
+      - 127.0.0.1:${STARROCKS_HTTP_PORT:-8030}:8030
+    volumes:
+      - ./infra/starrocks/conf/fe.conf:/opt/lakehouse/fe.conf:ro
+      - ./infra/starrocks/fe-entrypoint.sh:/opt/lakehouse/fe-entrypoint.sh:ro
+      - ./.runtime/container-mounts/starrocks-fe-keystore.p12:/run/secrets/starrocks_fe_keystore.p12:ro
+      - ./.runtime/container-mounts/starrocks-keystore-password:/run/secrets/starrocks_keystore_password:ro
+      - starrocks-fe-meta:/opt/starrocks/fe/meta
+    networks: [core, data-access, starrocks]
+    mem_limit: ${STARROCKS_FE_MEMORY_LIMIT:-2g}
+    healthcheck:
+      <<: *starrocks-health
+      test: [CMD-SHELL, "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8030 && printf \"GET /api/health HTTP/1.0\\r\\n\\r\\n\" >&3 && grep -q OK <&3'"]
+    restart: on-failure:3
+
+  starrocks-be:
+    image: starrocks/be-ubuntu:4.1.7@sha256:39f7320127c9924abb1f1ce0ba0583ab11989cbe5bd1bb6274ada6f89ba5740d
+    command: [/opt/starrocks/be/bin/start_be.sh]
+    hostname: starrocks-be
+    volumes:
+      - ./infra/starrocks/conf/be.conf:/opt/starrocks/be/conf/be.conf:ro
+      - starrocks-be-storage:/opt/starrocks/be/storage
+    networks: [data-access, starrocks]
+    mem_limit: ${STARROCKS_BE_MEMORY_LIMIT:-4g}
+    depends_on:
+      starrocks-fe:
+        condition: service_healthy
+    healthcheck:
+      <<: *starrocks-health
+      test: [CMD-SHELL, "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8040 && printf \"GET /api/health HTTP/1.0\\r\\n\\r\\n\" >&3 && grep -q OK <&3'"]
+    restart: on-failure:3
+
+networks:
+  starrocks:
+    name: lakehouse-local_starrocks
+    driver: bridge
+    internal: true
+
+volumes:
+  starrocks-fe-meta:
+  starrocks-be-storage:

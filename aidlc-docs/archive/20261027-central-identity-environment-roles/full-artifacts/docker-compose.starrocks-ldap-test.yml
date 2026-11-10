@@ -1,0 +1,69 @@
+# Explicit disposable StarRocks/FreeIPA role-mapping test. Start only with:
+# docker compose -p starrocks-ldap-test -f docker-compose.starrocks-ldap-test.yml up -d
+# This topology does not attach to iceberg-poc-net or mount any lakehouse state.
+services:
+  starrocks-ldap-test-fe:
+    image: local/starrocks-fe:4.1.6-kerberos
+    container_name: starrocks-ldap-test-fe
+    hostname: starrocks-ldap-test-fe
+    entrypoint: ["/usr/bin/tini-static", "--", "/bin/bash", "/run/test/test-fe-entrypoint.sh"]
+    environment:
+      USER: "$${USER}"
+    volumes:
+      - starrocks-ldap-test-fe-meta:/opt/starrocks/fe/meta
+      - ./infra/starrocks/ldap-access/test-fe-entrypoint.sh:/run/test/test-fe-entrypoint.sh:ro
+      - ./.runtime/ranger-test/secrets/freeipa-test-ca.crt:/run/ldap/freeipa-test-ca.crt:ro
+      - ./.runtime/starrocks-ldap-test/secrets/starrocks-test.jks:/run/sql-tls/starrocks-test.jks:ro
+      - ./.runtime/starrocks-ldap-test/secrets/starrocks-test.crt:/run/sql-tls/starrocks-test.crt:ro
+      - ./.runtime/starrocks-ldap-test/secrets/keystore-password:/run/sql-tls/keystore-password:ro
+      - ./.runtime/starrocks-ldap-test/secrets/mysql-admin.cnf:/run/admin/mysql-admin.cnf:ro
+      - ./.runtime/starrocks-ldap-test/secrets/developer-user.cnf:/run/test-secrets/developer-user.cnf:ro
+      - ./.runtime/starrocks-ldap-test/secrets/analyst-user.cnf:/run/test-secrets/analyst-user.cnf:ro
+      - ./.runtime/starrocks-ldap-test/secrets/write-service-account.cnf:/run/test-secrets/write-service-account.cnf:ro
+    networks:
+      starrocks-ldap-test-net:
+        ipv4_address: 172.29.252.20
+    mem_limit: 4g
+    cpus: 2
+    healthcheck:
+      test: ["CMD-SHELL", "curl --connect-timeout 2 --max-time 4 -fsS http://127.0.0.1:8030/api/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 24
+      start_period: 120s
+    restart: "no"
+
+  starrocks-ldap-test-be:
+    image: local/starrocks-be:4.1.6-kerberos
+    container_name: starrocks-ldap-test-be
+    hostname: starrocks-ldap-test-be
+    entrypoint: ["/usr/bin/tini-static", "--", "/bin/bash", "/run/test/test-be-entrypoint.sh"]
+    volumes:
+      - starrocks-ldap-test-be-storage:/opt/starrocks/be/storage
+      - ./infra/starrocks/ldap-access/test-be-entrypoint.sh:/run/test/test-be-entrypoint.sh:ro
+    networks:
+      starrocks-ldap-test-net:
+        ipv4_address: 172.29.252.21
+    depends_on:
+      starrocks-ldap-test-fe:
+        condition: service_healthy
+    mem_limit: 3g
+    cpus: 2
+    healthcheck:
+      test: ["CMD-SHELL", "bash -ec 'echo > /dev/tcp/127.0.0.1/9050'"]
+      interval: 10s
+      timeout: 5s
+      retries: 24
+      start_period: 60s
+    restart: "no"
+
+networks:
+  starrocks-ldap-test-net:
+    name: ranger-test-ipa-net
+    external: true
+
+volumes:
+  starrocks-ldap-test-fe-meta:
+    name: starrocks-ldap-test-fe-meta
+  starrocks-ldap-test-be-storage:
+    name: starrocks-ldap-test-be-storage

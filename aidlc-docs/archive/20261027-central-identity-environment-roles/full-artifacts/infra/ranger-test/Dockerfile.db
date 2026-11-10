@@ -1,0 +1,9 @@
+FROM apache/ranger-db@sha256:eff45c4dcbd3681efec039b1ad2586f60e74f7d531ad5b544efe56fbb3cb0897
+
+USER root
+COPY ranger-db-entrypoint.sh /usr/local/sbin/ranger-test-db-entrypoint
+COPY ranger-db-init-user.sh /docker-entrypoint-initdb.d/10-ranger-test-user.sh
+RUN chmod 0755 /usr/local/sbin/ranger-test-db-entrypoint /docker-entrypoint-initdb.d/10-ranger-test-user.sh \
+    && rm -f /docker-entrypoint-initdb.d/init_postgres.sh
+ENTRYPOINT ["/usr/local/sbin/ranger-test-db-entrypoint"]
+CMD ["postgres"]

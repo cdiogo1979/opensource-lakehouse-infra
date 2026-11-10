@@ -1,0 +1,18 @@
+{
+  "intent_id": "20261028-polaris-database-path-layout",
+  "name": "Polaris Database Path Layout",
+  "status": "closed",
+  "closed_date": "2026-10-28",
+  "verification": "passed",
+  "summary": "Updated and verified the default-product Polaris table object path layout; prepared deploy handoff without performing external deployment.",
+  "archived_artifacts": [
+    "full-artifacts/aidlc-docs/current",
+    "full-artifacts/README.md",
+    "full-artifacts/infra/polaris/bootstrap-default-catalogs.py",
+    "full-artifacts/infra/polaris/bootstrap-product-authorization.py",
+    "full-artifacts/infra/polaris/reset-default-product-once.py",
+    "full-artifacts/infra/spark-bootstrap/create_smoke_tables.py",
+    "full-artifacts/infra/spark-bootstrap/verify_role_matrix.py",
+    "full-artifacts/aidlc-docs/knowledge/opensource-lakehouse-infra-v2/application-design.md"
+  ]
+}

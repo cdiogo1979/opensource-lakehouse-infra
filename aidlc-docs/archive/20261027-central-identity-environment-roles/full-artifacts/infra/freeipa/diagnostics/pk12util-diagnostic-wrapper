@@ -1,0 +1,210 @@
+#!/usr/bin/bash
+set -u
+
+readonly real_pk12util="/usr/bin/pk12util.real"
+readonly diag_dir="/run/freeipa-diag"
+readonly result_log="/data/var/log/ipa-pkcs12-diagnostic.log"
+input_file=""
+input_password_file=""
+database=""
+database_password_file=""
+
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  case "${args[i]}" in
+    -i)
+      ((i + 1 < ${#args[@]})) && input_file="${args[i + 1]}"
+      ;;
+    -w)
+      ((i + 1 < ${#args[@]})) && input_password_file="${args[i + 1]}"
+      ;;
+    -k)
+      ((i + 1 < ${#args[@]})) && database_password_file="${args[i + 1]}"
+      ;;
+    -d)
+      ((i + 1 < ${#args[@]})) && database="${args[i + 1]}"
+      ;;
+  esac
+done
+
+report() {
+  local message="$1"
+  printf '%s\n' "${message}"
+  printf '%s\n' "${message}" >> "${result_log}"
+  chmod 0600 "${result_log}"
+}
+
+if [[ "${input_file##*/}" != "ca-agent.p12" || ! -r "${input_file}" || ! -r "${input_password_file}" ]]; then
+  exec "${real_pk12util}" "$@"
+fi
+
+mkdir -p "${diag_dir}"
+chmod 0700 "${diag_dir}"
+cp -- "${input_file}" "${diag_dir}/ca-agent.p12"
+cp -- "${input_password_file}" "${diag_dir}/p12-password"
+chmod 0600 "${diag_dir}/ca-agent.p12" "${diag_dir}/p12-password"
+report "PKCS12_DIAG hook=intercepted_ca_agent_import"
+
+openssl_check() {
+  local mode="$1"
+  shift
+  local output="${diag_dir}/openssl-${mode}.log"
+  openssl pkcs12 -in "${diag_dir}/ca-agent.p12" -passin "file:${diag_dir}/p12-password" \
+    -info -noout "$@" > "${output}" 2>&1
+  local result=$?
+  report "PKCS12_DIAG openssl_${mode}_parse_rc=${result}"
+  while IFS= read -r metadata; do
+    report "PKCS12_DIAG openssl_${mode}_metadata=${metadata}"
+  done < <(sed -nE '/^(MAC:|MAC length:|PKCS7 Encrypted data:|Shrouded Keybag:|Key bag:|Certificate bag:)/p' "${output}")
+  if grep -q 'MAC verify error' "${output}"; then
+    report "PKCS12_DIAG openssl_${mode}_mac_verify=failed"
+  elif ((result == 0)); then
+    report "PKCS12_DIAG openssl_${mode}_mac_verify=passed"
+  fi
+}
+
+openssl_check default
+openssl_check legacy -legacy
+
+java_db="${diag_dir}/pki-cli-nss-db"
+mkdir -m 0700 "${java_db}"
+if certutil -N -d "${java_db}" --empty-password >/dev/null 2>&1; then
+  : > "${diag_dir}/empty-db-password"
+  chmod 0600 "${diag_dir}/empty-db-password"
+  pki -d "${java_db}" -C "${diag_dir}/empty-db-password" pkcs12-import \
+    --pkcs12 "${diag_dir}/ca-agent.p12" \
+    --password-file "${diag_dir}/p12-password" \
+    --no-trust-flags > "${diag_dir}/pki-cli-import.log" 2>&1
+  pki_cli_rc=$?
+  report "PKCS12_DIAG pki_cli_import_rc=${pki_cli_rc}"
+  if ((pki_cli_rc != 0)); then
+    if grep -Eqi 'password|decrypt|MAC' "${diag_dir}/pki-cli-import.log"; then
+      report "PKCS12_DIAG pki_cli_import_error=credential_or_p12_parse"
+    elif grep -Eqi 'unsupported|algorithm' "${diag_dir}/pki-cli-import.log"; then
+      report "PKCS12_DIAG pki_cli_import_error=unsupported_algorithm"
+    else
+      report "PKCS12_DIAG pki_cli_import_error=other"
+    fi
+  fi
+else
+  report "PKCS12_DIAG pki_cli_database_setup=failed"
+fi
+
+db_path="${database#sql:}"
+if [[ -n "${db_path}" && -d "${db_path}" && -r "${database_password_file}" ]]; then
+  cp -- "${database_password_file}" "${diag_dir}/database-password"
+  cp -a -- "${db_path}" "${diag_dir}/database-copy"
+  chmod 0600 "${diag_dir}/database-password"
+fi
+
+"${real_pk12util}" "$@"
+original_rc=$?
+
+if ((original_rc == 0)); then
+  report "PKCS12_DIAG original_import_rc=0"
+  exit 0
+fi
+
+report "PKCS12_DIAG original_import_rc=${original_rc}"
+
+db_path="${database#sql:}"
+if [[ -n "${db_path}" && -d "${db_path}" && -r "${database_password_file}" ]]; then
+  pki -d "${db_path}" -C "${database_password_file}" pkcs12-import \
+    --pkcs12 "${diag_dir}/ca-agent.p12" \
+    --password-file "${diag_dir}/p12-password" \
+    --no-trust-flags > "${diag_dir}/pki-cli-fallback.log" 2>&1
+  pki_cli_fallback_rc=$?
+  report "PKCS12_DIAG pki_cli_fallback_rc=${pki_cli_fallback_rc}"
+  if ((pki_cli_fallback_rc == 0)); then
+    exit 0
+  fi
+  if grep -Eqi 'password|decrypt|MAC' "${diag_dir}/pki-cli-fallback.log"; then
+    report "PKCS12_DIAG pki_cli_fallback_error=credential_or_p12_parse"
+  elif grep -Eqi 'unsupported|algorithm' "${diag_dir}/pki-cli-fallback.log"; then
+    report "PKCS12_DIAG pki_cli_fallback_error=unsupported_algorithm"
+  else
+    report "PKCS12_DIAG pki_cli_fallback_error=other"
+  fi
+fi
+
+fresh_db="${diag_dir}/fresh-nss-db"
+mkdir -m 0700 "${fresh_db}"
+if certutil -N -d "sql:${fresh_db}" --empty-password >/dev/null 2>&1; then
+  : > "${diag_dir}/empty-db-password"
+  chmod 0600 "${diag_dir}/empty-db-password"
+  "${real_pk12util}" -d "sql:${fresh_db}" -i "${diag_dir}/ca-agent.p12" \
+    -k "${diag_dir}/empty-db-password" -v -w "${diag_dir}/p12-password" \
+    > "${diag_dir}/fresh-import.log" 2>&1
+  fresh_rc=$?
+  report "PKCS12_DIAG fresh_nss_import_rc=${fresh_rc}"
+  if grep -Eo 'SEC_ERROR_[A-Z0-9_]+' "${diag_dir}/fresh-import.log" | sort -u | head -5; then
+    while IFS= read -r error_code; do
+      report "PKCS12_DIAG fresh_nss_error=${error_code}"
+    done
+  fi
+else
+  report "PKCS12_DIAG fresh_nss_database_setup=failed"
+fi
+
+legacy_pem="${diag_dir}/ca-agent-legacy.pem"
+legacy_p12="${diag_dir}/ca-agent-legacy.p12"
+if openssl pkcs12 -in "${diag_dir}/ca-agent.p12" -passin "file:${diag_dir}/p12-password" \
+  -nodes -out "${legacy_pem}" > "${diag_dir}/legacy-export.log" 2>&1; then
+  chmod 0600 "${legacy_pem}"
+  if openssl pkcs12 -export -in "${legacy_pem}" -out "${legacy_p12}" \
+    -passout "file:${diag_dir}/p12-password" -keypbe PBE-SHA1-3DES \
+    -certpbe PBE-SHA1-3DES -macalg sha1 > "${diag_dir}/legacy-export.log" 2>&1; then
+    chmod 0600 "${legacy_p12}"
+    legacy_db="${diag_dir}/legacy-nss-db"
+    mkdir -m 0700 "${legacy_db}"
+    if certutil -N -d "sql:${legacy_db}" --empty-password >/dev/null 2>&1; then
+      "${real_pk12util}" -d "sql:${legacy_db}" -i "${legacy_p12}" \
+        -k "${diag_dir}/empty-db-password" -v -w "${diag_dir}/p12-password" \
+        > "${diag_dir}/legacy-import.log" 2>&1
+      legacy_rc=$?
+      report "PKCS12_DIAG legacy_pbe_nss_import_rc=${legacy_rc}"
+      while IFS= read -r error_code; do
+        report "PKCS12_DIAG legacy_pbe_nss_error=${error_code}"
+      done < <(grep -Eo 'SEC_ERROR_[A-Z0-9_]+' "${diag_dir}/legacy-import.log" | sort -u | head -5)
+    else
+      report "PKCS12_DIAG legacy_pbe_nss_database_setup=failed"
+    fi
+  else
+    report "PKCS12_DIAG legacy_pbe_export=failed"
+    if grep -qi 'MAC verify error' "${diag_dir}/legacy-export.log"; then
+      report "PKCS12_DIAG legacy_pbe_export_error=mac_verify_failed"
+    elif grep -Eqi 'unsupported|unknown cipher|unknown pbe algorithm' "${diag_dir}/legacy-export.log"; then
+      report "PKCS12_DIAG legacy_pbe_export_error=unsupported_algorithm"
+    elif grep -Eqi 'bad decrypt|maybe wrong password|cipherfinal' "${diag_dir}/legacy-export.log"; then
+      report "PKCS12_DIAG legacy_pbe_export_error=private_key_decrypt_failed"
+    else
+      report "PKCS12_DIAG legacy_pbe_export_error=other"
+    fi
+  fi
+else
+  report "PKCS12_DIAG legacy_pem_export=failed"
+  if grep -qi 'MAC verify error' "${diag_dir}/legacy-export.log"; then
+    report "PKCS12_DIAG legacy_pem_export_error=mac_verify_failed"
+  elif grep -Eqi 'unsupported|unknown cipher|unknown pbe algorithm' "${diag_dir}/legacy-export.log"; then
+    report "PKCS12_DIAG legacy_pem_export_error=unsupported_algorithm"
+  elif grep -Eqi 'bad decrypt|maybe wrong password|cipherfinal' "${diag_dir}/legacy-export.log"; then
+    report "PKCS12_DIAG legacy_pem_export_error=private_key_decrypt_failed"
+  else
+    report "PKCS12_DIAG legacy_pem_export_error=other"
+  fi
+fi
+
+if [[ -d "${diag_dir}/database-copy" && -r "${diag_dir}/database-password" ]]; then
+  "${real_pk12util}" -d "sql:${diag_dir}/database-copy" -i "${diag_dir}/ca-agent.p12" \
+    -k "${diag_dir}/database-password" -v -w "${diag_dir}/p12-password" \
+    > "${diag_dir}/cloned-import.log" 2>&1
+  cloned_rc=$?
+  report "PKCS12_DIAG cloned_nss_import_rc=${cloned_rc}"
+  if grep -Eo 'SEC_ERROR_[A-Z0-9_]+' "${diag_dir}/cloned-import.log" | sort -u | head -5; then
+    while IFS= read -r error_code; do
+      report "PKCS12_DIAG cloned_nss_error=${error_code}"
+    done
+  fi
+fi
+
+exit "${original_rc}"

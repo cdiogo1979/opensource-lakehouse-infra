@@ -1,0 +1,18 @@
+services:
+  freeipa-validation:
+    build:
+      context: ./infra/freeipa
+      dockerfile: diagnostics/Dockerfile
+    image: local/freeipa-pkcs12-diagnostic:4.13.4-almalinux-9-arm64-test
+    container_name: iceberg-poc-freeipa-instrumented12
+    environment:
+      IPA_SERVER_IP: 172.30.250.10
+    tmpfs:
+      - /run/freeipa-diag:rw,noexec,nosuid,size=64m,mode=0700
+    networks:
+      freeipa_validation_net:
+        ipv4_address: 172.30.250.10
+
+volumes:
+  freeipa-validation-data:
+    name: iceberg-poc-freeipa-validation-data-instrumented12

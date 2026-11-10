@@ -1,0 +1,12 @@
+bridge bridge
+host host
+iceberg-poc-freeipa-validation-net bridge
+iceberg-poc-jupyterhub-ipa-net bridge
+iceberg-poc-net bridge
+identity_test_net bridge
+none null
+ranger-test-control-net bridge
+ranger-test-db-net bridge
+ranger-test-directory-net bridge
+ranger-test-ipa-net bridge
+semantica-poc_default bridge

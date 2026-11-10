@@ -1,0 +1,42 @@
+# U2 NFR Requirements — Identity and Catalog Authorization
+
+## Scope
+
+These requirements apply to Keycloak identity, OIDC token handling, Keycloak product-group entitlements, Polaris principal reconciliation, and Polaris catalog authorization for the local `default` data product. They refine approved project NFR-01 and NFR-04–NFR-08. The environment access matrix remains as defined by FR-10 and the approved U2 Functional Design.
+
+U3 owns RustFS policy/credential enforcement. U4 owns the operator CLI orchestration, Spark smoke workload, and end-to-end integration checks. This artifact records quality requirements and acceptance evidence; it does not implement or mutate runtime identity/catalog state.
+
+## Requirements
+
+| ID | Requirement | Acceptance evidence | Trace |
+|---|---|---|---|
+| U2-NFR-01 | Use one canonical Keycloak issuer, `http://keycloak.localhost:8080/realms/lakehouse`, for browser discovery, host-side clients, and Polaris. Issuer identity must be byte-for-byte consistent in OIDC metadata and JWT `iss`; no split issuer is accepted. | Host browser/client retrieves discovery metadata from the canonical issuer; Polaris retrieves JWKS through private `keycloak` service DNS while explicitly validating the canonical issuer. A host-acquired token validates in Polaris and reports the same `iss`. Failure to resolve or validate metadata/keys prevents authorization with an actionable diagnostic. | Q1; NFR-05, FR-08, U2 Functional Design |
+| U2-NFR-02 | Human access tokens presented to Polaris have a maximum lifetime of five minutes. Expired tokens are rejected. Human clients renew through an interactive OIDC session; password grant is not used. | Inspect test token `iat`/`exp` claims without logging the token; verify lifetime is at most five minutes and expired-token requests are denied. | Q4; FR-08, FR-12, NFR-05 |
+| U2-NFR-03 | Keycloak group membership is the source of product-role entitlement. An explicit, idempotent reconciliation must be run after each group membership change; the change is not considered complete until Polaris principal-role assignments match current membership. | Add and remove test membership, reconcile, inspect effective Polaris assignments, and verify the command returns a terminal result. A failed reconciliation is nonzero/actionable and is never reported as successful. | Q2; FR-06, FR-08, FR-10; US-03–US-07 |
+| U2-NFR-04 | After successful reconciliation removes a product role, no request may remain authorized by that role more than five minutes after the reconciliation completes. New tokens reflect current membership; existing tokens are bounded by their five-minute maximum lifetime. | Measure the elapsed time from successful reconciliation to denial for requests using previously issued tokens. Verify a new token after removal lacks the role and access is denied. | Q3, Q4; FR-08, FR-10; NFR-05 |
+| U2-NFR-05 | The writer OAuth client secret is rotated at least every 90 days and immediately after suspected exposure. Rotation must support a controlled cutover to a replacement credential and retirement of the previous credential without printing either value. | Document and execute a rotation rehearsal using protected files; verify the writer authenticates with the replacement, the old credential is retired, and neither secret appears in output/logs. If Keycloak cannot overlap secrets on one client, use a controlled replacement client identity during the cutover. | Q5; FR-07, FR-12; NFR-04 |
+| U2-NFR-06 | Product-user authorization fails closed when Keycloak is unavailable. No user request may gain product access from a broader cached entitlement, fallback Polaris credential, or default role. Protected setup credentials are restricted to explicitly invoked bootstrap/administration operations and are never a user-access fallback. | With Keycloak unavailable, new product requests fail safely and no product role is granted from a fallback; protected bootstrap operations remain separately controlled. Recovery does not widen grants. | Q6; FR-08–FR-10; NFR-05 |
+| U2-NFR-07 | Authorization and reconciliation diagnostics identify operation outcome, provider, principal username, product role, catalog, and failure category where known. They never include passwords, client secrets, bearer tokens, authorization headers, or token payloads. | Inject known credential canaries and review command output and relevant provider logs; canaries and bearer material are absent while a failed operation remains actionable. | Q7; FR-01, FR-07, NFR-04, NFR-07 |
+| U2-NFR-08 | Polaris authorization must preserve the approved role/environment matrix and separate content privileges from grant-management privileges. Developer/writer write roles do not gain drop, catalog-configuration, or grant-management authority by implication. | Run positive and negative catalog/namespace/table metadata and data-operation probes for all four roles in all three catalogs; verify only approved actions succeed. | FR-09, FR-10; US-04–US-07; U2 Functional Design |
+| U2-NFR-09 | Identity and Polaris authorization setup is additive and idempotent. Matching state is preserved; conflicting issuer, principal, group mapping, role definition, or grant fails safely without broad replacement/deletion. | Run the setup/reconciliation twice and compare state; inject a conflicting mapping and verify nonzero failure with existing unrelated state preserved. | NFR-01; US-08 |
+| U2-NFR-10 | Identity-provider, token-validation, and Polaris-grant failures must not be interpreted as successful authorization. Reconciliation failure must leave the result in a visible non-converged state until a successful retry. | Inject unavailable providers, malformed/missing claims, unknown principals, insufficient grants, and reconciliation errors; dependent operations fail nonzero with redacted cause and no expanded entitlement. | FR-08–FR-10; NFR-05, NFR-07 |
+
+## Availability, performance, and revocation expectations
+
+- This remains a local Compose journey with at most one bootstrap/authorization reconciliation workload at a time, inheriting the approved U1 local-operation boundary; U2 adds no horizontal scaling or concurrent mutation guarantee.
+- The group-to-Polaris synchronization trigger is explicit operator-driven reconciliation. There is no scheduled background synchronizer or identity event listener in this requirement set.
+- The maximum intended stale-token window after successful reconciliation is five minutes, bounded by the maximum human access-token lifetime. No separate millisecond-scale revocation guarantee is established.
+- No API latency, throughput, availability percentage, RTO, or RPO target is established. Provider dependencies and authorization errors must still be terminal, redacted, and actionable.
+
+## Security and privacy expectations
+
+- The canonical local issuer uses HTTP only on host loopback and the private Compose network, consistent with approved U1 local transport requirements. It must not be published on a non-loopback interface.
+- Human clients use Authorization Code with PKCE. The writer uses OAuth client credentials. Human password grant and Kerberos are not used.
+- Keycloak groups do not replace Polaris principals, principal roles, catalog roles, or explicit grants. Identity and catalog enforcement must both succeed.
+- Product-owner rights remain product-scoped. They do not confer Keycloak realm administration or RustFS root/policy administration.
+- Writer credentials are protected, rotated, and excluded from logs and repository content. Token payloads and authorization headers are always treated as secrets.
+- RustFS direct-object authorization remains independently enforced and verified in U3; passing a Polaris-only check is not evidence of storage authorization.
+
+## Verification approach
+
+Build and Test should verify the canonical issuer from the host/browser and Compose network, token issuer/audience and five-minute lifetime, expired/malformed token rejection, group add/remove reconciliation, revocation within five minutes, writer-secret rotation, outage fail-closed behavior, redacted diagnostics, and the complete positive/negative access matrix. Verify that a second reconciliation is stable and that conflicting state is preserved and reported. Exact Keycloak 26.8.1/Polaris 1.8.0 claim mapping and Polaris principal-role behavior are version-sensitive integration checks.

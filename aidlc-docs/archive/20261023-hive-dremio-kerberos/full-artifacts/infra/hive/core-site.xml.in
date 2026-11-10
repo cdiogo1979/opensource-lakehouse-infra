@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <property>
+    <name>hadoop.security.authentication</name>
+    <value>kerberos</value>
+  </property>
+  <property>
+    <name>hadoop.proxyuser.dremio.hosts</name>
+    <value>172.18.0.0/16</value>
+  </property>
+  <property>
+    <name>hadoop.proxyuser.dremio.users</name>
+    <value>admin,write-service-account,user_a,user_b</value>
+  </property>
+</configuration>

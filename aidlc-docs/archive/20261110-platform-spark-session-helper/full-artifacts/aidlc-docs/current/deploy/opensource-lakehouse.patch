@@ -1,0 +1,1705 @@
+From ad1ca8dbbbc32cd6cf97378f9ede9b2dd010a7fd Mon Sep 17 00:00:00 2001
+From: cdiogo1979 <cdiogo@gmail.com>
+Date: Tue, 10 Nov 2026 16:21:26 +0000
+Subject: [PATCH 1/3] Use the platform's Spark session; declared task arguments
+ and Jupyter widgets
+
+The lakehouse platform now owns the Spark session (catalogs, token source,
+redaction) in its lakehouse_spark module. start_spark_job loads this
+repository's config and asks the platform for the session with its
+catalog_name; the legacy config-dir branches are gone.
+
+notebooks/common/cli.py gains parse_task_args: a job declares its task
+arguments once; values come from the workflow's args in Airflow and from
+input widgets (jupyter_input_widget_helper.py) or TASK_ARGS in Jupyter.
+Values are strings; jobs check them. jupyter_helper.py becomes
+notebooks/common/jupyter_environment_resolver.py, which honours
+LAKEHOUSE_ENVIRONMENT. generate_tpch.py uses both; tests and docs follow.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ AGENTS.md                                     |   6 +-
+ README.md                                     |  50 +++--
+ notebooks/common/cli.py                       | 169 ++++++++++++++++-
+ notebooks/common/job_runtime.py               | 137 ++++++--------
+ .../common/jupyter_environment_resolver.py    |  55 ++++++
+ .../common/jupyter_input_widget_helper.py     |  69 +++++++
+ notebooks/workload/count_sample_rows.py       |  12 +-
+ notebooks/workload/generate_tpch.py           |  61 +++---
+ notebooks/workload/jupyter_helper.py          |  26 ---
+ notebooks/workload/test_environment.py        |  11 +-
+ .../workload_foundation/test_generate_tpch.py |  19 +-
+ tests/workload_foundation/test_job_runtime.py |  87 +++++++++
+ .../test_jupyter_scripts.py                   |  51 +++++
+ .../test_task_arguments.py                    | 179 ++++++++++++++++++
+ 14 files changed, 758 insertions(+), 174 deletions(-)
+ create mode 100644 notebooks/common/jupyter_environment_resolver.py
+ create mode 100644 notebooks/common/jupyter_input_widget_helper.py
+ delete mode 100644 notebooks/workload/jupyter_helper.py
+ create mode 100644 tests/workload_foundation/test_job_runtime.py
+ create mode 100644 tests/workload_foundation/test_jupyter_scripts.py
+ create mode 100644 tests/workload_foundation/test_task_arguments.py
+
+diff --git a/AGENTS.md b/AGENTS.md
+index a3d7528..b76e600 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -5,7 +5,7 @@ This is a lakehouse **data product repository**. [README.md](README.md) is the c
+ ## What belongs here
+ - `workflows/<name>.json`: Airflow DAG declarations (workflow JSON v1, see the README). This is the only way to declare DAGs.
+ - `notebooks/workload/*.py`: Spark entry points in Jupytext `py:percent` format, runnable by `spark-submit` and as notebooks.
+-- `notebooks/common/`: shared helpers (`config_loader.py`, `cli.py`, `job_runtime.py`), used by Airflow runs and Jupyter.
++- `notebooks/common/`: shared helpers (`config_loader.py`, `cli.py`, `job_runtime.py`), used by Airflow runs and Jupyter, and the Jupyter `%run` scripts `jupyter_environment_resolver.py` and `jupyter_input_widget_helper.py`.
+ - `configs/<env>.yml` and optional `configs/<product>/<env>.yml`: non-secret settings for `prod`, `uat`, `dev`.
+ - `dags/lakehouse.py`: the platform stub. **Never edit it, and never add files to `dags/`.**
+ - `requirements.txt`: optional extra Python packages for the workload code, installed by the platform at each Airflow run and with `lakehouse-install-requirements` in Jupyter.
+@@ -15,7 +15,9 @@ This is a lakehouse **data product repository**. [README.md](README.md) is the c
+ - **No DAG code**: don't write Airflow DAG code, operators, or a DAG factory here. The lakehouse platform's `lakehouse_dags` package builds the DAGs from `workflows/*.json`. DAG IDs are `<bundle>-<name>` and must not be set or changed in this repository.
+ - **Valid workflows**: keep every workflow file valid. One invalid file blocks all of the bundle's DAGs in Airflow. CI runs `lakehouse-validate-workflows .`. Unknown fields are refused, `name` must equal the file name, and `entrypoint` must exist in `notebooks/workload/`.
+ - **Entry points**:
+-  - use `notebooks.common.job_runtime.start_spark_job(app_name)` for the config and the Spark session, and `notebooks.common.cli.task_args()` for workflow `args` (passed after `--`, never templated);
++  - use `notebooks.common.job_runtime.start_spark_job(app_name)` for the config and the Spark session, and declare task arguments for `notebooks.common.cli.parse_task_args(...)` (workflow `args` after `--` in Airflow, widgets or `TASK_ARGS` in Jupyter; values are strings, never templated; check them in the job);
++  - never configure Spark catalogs, tokens or redaction here: the platform's `lakehouse_spark` does that;
++  - in notebooks, run `%run ../common/jupyter_environment_resolver.py` (and `jupyter_input_widget_helper.py` after `WIDGET_LIST`);
+   - keep run code under `if __name__ == "__main__":` and stop Spark in `finally:`.
+ - **Configs**:
+   - the loader accepts only `dev`, `uat` and `prod`, requires `storage_path` and `database_name`, and never falls back across environments;
+diff --git a/README.md b/README.md
+index 4be75af..b72d59e 100644
+--- a/README.md
++++ b/README.md
+@@ -67,13 +67,14 @@ dags/
+ notebooks/
+   common/                  Shared helpers for Airflow runs and Jupyter:
+     config_loader.py         load and validate configs/<env>.yml (and configs/<product>/<env>.yml)
+-    cli.py                   --environment, --config-dir, and task arguments after --
+-    job_runtime.py           start_spark_job(): config plus a catalog-ready Spark session
++    cli.py                   --environment, --config-dir, task arguments (parse_task_args)
++    job_runtime.py           start_spark_job(): config, then the platform's Spark session
++    jupyter_environment_resolver.py   Jupyter start-up: the clone, the environment, spark and config (%run)
++    jupyter_input_widget_helper.py    Jupyter input widgets for a job's task arguments (%run)
+   workload/                Spark jobs (Jupytext py:percent files, also notebooks)
+     test_environment.py      creates the smoke table
+     count_sample_rows.py     counts its rows
+     generate_tpch.py         generates TPC-H data with DuckDB and checks one entity's row count
+-    jupyter_helper.py        Jupyter start-up (dev settings)
+ configs/                   Non-secret settings: dev.yml, uat.yml, prod.yml, optional <product>/<env>.yml
+ tests/                     pytest and Hypothesis tests for the helpers and workloads
+ scripts/code_quality.sh    lint, flake8, bandit (used by CI)
+@@ -162,18 +163,27 @@ spark-submit --master local[*] /opt/lakehouse-bundle/notebooks/workload/<entrypo
+ Use the shared helpers rather than parsing `sys.argv` yourself:
+ 
+ ```python
+-from notebooks.common.cli import task_args
++from notebooks.common.cli import parse_task_args
+ from notebooks.common.job_runtime import start_spark_job
+ 
++TASK_ARGUMENTS = {"date": {"required": True}, "mode": {"default": "append"}}
++
+ spark, config = start_spark_job("load_sales")  # reads --environment and --config-dir; dev in Jupyter
+-extra = task_args()                             # the workflow task's "args"; [] in Jupyter
++arguments = parse_task_args(TASK_ARGUMENTS)     # {"date": "2026-11-10", "mode": "append"}
+ ```
+ 
++- **Who does what**: the platform starts the Spark session (the Polaris catalogs, your run's or your own token, redaction) with its `lakehouse_spark` module, which both platform images provide. This repository keeps its configuration: every key of `configs/<env>.yml` reaches the job.
+ - **`start_spark_job(app_name)`**:
+   - parses `--environment` and `--config-dir`, or in Jupyter uses `LAKEHOUSE_ENVIRONMENT` (default `dev`);
+-  - loads the config, preferring the product folder (see below);
+-  - returns `(spark, config)` with the Iceberg catalogs and token handling configured.
+-- **Arguments**: `cli.parse_args()` returns the same values plus `task_args`, and `cli.task_args()` returns only the arguments after the first `--`, unchanged. Arguments are passed as a list and never go through a shell.
++  - loads the config (in Airflow, preferring the product folder; see below);
++  - asks the platform for the session with the config's `catalog_name`, and returns `(spark, config)`. The Spark application is `<env>-<app_name>`.
++- **Task arguments**: declare them once and read them with `parse_task_args(declaration)`:
++  - **declaration**: each name maps to `{"required": True}`, `{"default": "<text>"}` or `{}`; `date` is the option `--date`, `scale_factor` is `--scale-factor`;
++  - **sources**: the workflow task's `args` (after `--`) in Airflow; in Jupyter the [input widgets](#working-in-jupyter), else a `TASK_ARGS` list in the notebook;
++  - **values are strings**, never converted or checked: check them in the job (as `generate_tpch.py` does);
++  - **structural errors** (an unknown option, a missing required one, an option given twice or without a value) are reported together with the usage: the task exits with status 2 in Airflow, and the cell raises `TaskArgumentError` in Jupyter.
++
++  `cli.task_args()` still returns the raw list (after `--`, or `TASK_ARGS` in Jupyter). Arguments are passed as a list and never go through a shell.
+ - **Environment variables** set in the Airflow container: `LAKEHOUSE_ENVIRONMENT` (`prod` or `uat`), `LAKEHOUSE_PRODUCT` (for example `default`), and `PYTHONPATH=/opt/lakehouse-bundle`, so `notebooks.common` imports work.
+ - **Stop Spark at the end**: call `spark.stop()` in a `finally:` block. Put the run code under `if __name__ == "__main__":` so tests and notebooks can import the file without starting Spark.
+ - **Packages**: entry points run on the platform's Python 3.10 environment plus this repository's `requirements.txt`; see [Python packages](#python-packages).
+@@ -182,7 +192,7 @@ extra = task_args()                             # the workflow task's "args"; []
+ 
+ Workload code runs on one Python environment, the same in Airflow's Spark containers and in the Jupyter kernel: **Python 3.10** with the platform's pinned packages, and PySpark 3.5.5 from the Spark installation.
+ 
+-- **The platform's packages**: PyYAML, requests, pandas, numpy, pyarrow, ipykernel and jupytext, with their dependencies, at versions fixed by the platform's lock (`infra/workload-python/requirements.lock` in the platform repository). Other packages are not available unless this repository asks for them.
++- **The platform's packages**: PyYAML, requests, pandas, numpy, pyarrow, ipykernel, jupytext and ipywidgets, with their dependencies, at versions fixed by the platform's lock (`infra/workload-python/requirements.lock` in the platform repository). Other packages are not available unless this repository asks for them.
+ - **This repository's extras**: list them in `requirements.txt` at the repository root, one plain requirement per line, for example:
+ 
+   ```text
+@@ -206,13 +216,14 @@ Workload code runs on one Python environment, the same in Airflow's Spark contai
+ |---|---|---|
+ | `prod` | Airflow, bundle `<product>-main` | `configs/<product>/prod.yml`, else `configs/prod.yml` |
+ | `uat` | Airflow, bundle `<product>-uat` | `configs/<product>/uat.yml`, else `configs/uat.yml` |
+-| `dev` | Jupyter only | `configs/<product>/dev.yml`, else `configs/dev.yml` |
++| `dev` | Jupyter only | `configs/dev.yml` |
+ 
+ - **Required keys**: `storage_path` (for example `s3a://bucket-default/`, ending with `/`) and `database_name`, the product's namespace for that environment, for example `default_lh`, `default_lhuat` or `default_lhdev`.
+   - **Usually present**: `catalog_name` (`lakehouse`, `lakehouse_uat` or `lakehouse_dev`).
+   - **Other keys**: any other keys, including nested ones, are passed through to the job as read-only values.
+ - **Strict loading**: the loader refuses unknown environment names and never falls back from one environment to another. A missing file fails `validate_environment` before any task runs.
+-- **One repository, several products**: put each product's settings in `configs/<product>/`. The `configs/<env>.yml` files are the fallback.
++- **One repository, several products**: put each product's settings in `configs/<product>/`; Airflow uses them (the platform sets the product from the bundle). The `configs/<env>.yml` files are the fallback, and the only files Jupyter reads.
++- **Your own settings**: add any keys you need, for example a source dataset that differs between `dev`, `uat` and `prod`; jobs read them from `config`.
+ - **The values must match the platform**: they have to be the product's namespaces and buckets from the platform's data product file. Access to anything else is refused by Polaris.
+ - **No secrets**: never put credentials, tokens or endpoints in configs.
+ 
+@@ -220,7 +231,18 @@ Workload code runs on one Python environment, the same in Airflow's Spark contai
+ 
+ 1. Sign in to JupyterHub (<http://jupyterhub.localhost:8000>) with your platform account. You need to be a developer or analyst of the product.
+ 2. Clone this repository into your workspace and open a file from `notebooks/workload/` as a notebook. Jupytext reads the `py:percent` format.
+-3. Run the cells. `# %run ./jupyter_helper.py` finds the repository root, selects `dev`, and starts Spark with **your own** identity, so you see and write only what your groups allow (for a developer, read in `prod` and `uat`, write in `dev`).
++3. Run the cells. `# %run ../common/jupyter_environment_resolver.py` finds the clone that holds the notebook, selects `dev`, and starts Spark with **your own** identity, so you see and write only what your groups allow (for a developer, read in `prod` and `uat`, write in `dev`). It defines `spark` and `config`.
++
++**Another environment**: run `%env LAKEHOUSE_ENVIRONMENT=uat` (or `prod`) before the resolver. A kernel that already has a session needs a restart to switch.
++
++**Task arguments as widgets**: list the job's arguments, then run the widget helper; fill in the fields and run the job's cells:
++
++```python
++WIDGET_LIST = ["entity", "scale_factor"]
++# %run ../common/jupyter_input_widget_helper.py
++```
++
++`parse_task_args` reads the fields (an empty field is "not given"); running the helper again keeps what you typed. Without widgets, it reads a `TASK_ARGS` list instead, for example `TASK_ARGS = ["--entity", "orders"]`.
+ 
+ **The kernel**: the only kernel is **Lakehouse (Python 3.10)**, with the same packages as Airflow runs. Notebooks saved with an older kernel open with it.
+ 
+@@ -233,7 +255,7 @@ lakehouse-install-requirements        # or: lakehouse-install-requirements path/
+ 
+ The packages go to `~/.local/lakehouse/python3.10`, which lasts only for the current server session (only `~/work` is kept across restarts): **rerun the command after every server start**. Running the command for another repository adds its packages too. When the platform's lock changes, the command asks you to rerun it with `--reset`, which empties that folder first.
+ 
+-**TPC-H in a notebook**: open `notebooks/workload/generate_tpch.py`, set `ENTITY` and `SCALE_FACTOR`, and run all cells.
++**TPC-H in a notebook**: open `notebooks/workload/generate_tpch.py`, run the cells up to the widgets, type an entity (for example `orders`), and run the remaining cells.
+ 
+ `workflows/` and `dags/` play no part in Jupyter. An entry point that works in Jupyter with `dev` should behave the same in Airflow with `uat` and `prod`, apart from data and permissions.
+ 
+@@ -264,7 +286,7 @@ CI doesn't deploy anything: Airflow picks up merged changes from Git by itself.
+ 4. Merge. Within about 5 minutes Airflow shows `<product>-uat-<name>`; run it there.
+ 5. Open a pull request from `uat` into `main`. After the merge, `<product>-main-<name>` appears.
+ 
+-**Add a task with arguments and retries**: add an entry to `tasks` with `args`, `retries` and, optionally, `retry_delay_seconds`. Read the arguments with `task_args()`.
++**Add a task with arguments and retries**: add an entry to `tasks` with `args`, `retries` and, optionally, `retry_delay_seconds`. Declare them in the entry point and read them with `parse_task_args(...)`.
+ 
+ **Add a Python package**:
+ 1. Add `<package>==<version>` to `requirements.txt`, and check that the package has a Linux aarch64 wheel for CPython 3.10 (on PyPI, the file list of that version).
+diff --git a/notebooks/common/cli.py b/notebooks/common/cli.py
+index 14bf1de..0210214 100644
+--- a/notebooks/common/cli.py
++++ b/notebooks/common/cli.py
+@@ -1,14 +1,28 @@
+-"""Shared command-line argument parsing for environment-based Spark jobs."""
++"""Shared argument parsing for Spark jobs, in Airflow (command line) and Jupyter (widgets or TASK_ARGS)."""
+ 
+ import argparse
++import os
++import re
+ import sys
+-from typing import Any, Optional
++from pathlib import Path
++from types import MappingProxyType
++from typing import Any, Mapping, Optional
+ 
+ from .config_loader import SUPPORTED_ENVIRONMENTS
+ 
+ # Airflow passes a task's workflow "args" after this separator:
+ #   spark-submit job.py --environment uat --config-dir ... -- --date 2026-11-10
+ TASK_ARGS_SEPARATOR = "--"
++# In Jupyter, a notebook's arguments come from the widgets that jupyter_input_widget_helper.py
++# keeps in this notebook variable, else from the notebook's TASK_ARGS list.
++WIDGETS_VARIABLE = "LAKEHOUSE_WIDGETS"
++TASK_ARGS_VARIABLE = "TASK_ARGS"
++ARGUMENT_NAME = re.compile(r"[a-z][a-z0-9_]{0,49}")
++SPEC_KEYS = frozenset({"required", "default"})
++
++
++class TaskArgumentError(ValueError):
++    """Every problem with a job's task arguments, followed by its usage line."""
+ 
+ 
+ def _split(argv: Optional[list]) -> tuple:
+@@ -48,15 +62,158 @@ def parse_args(argv: Any = None) -> argparse.Namespace:
+     return args
+ 
+ 
++def _notebook_namespace() -> Optional[dict]:
++    """The Jupyter notebook's variables, also while a %run script executes; None outside a kernel."""
++    if "ipykernel" not in sys.modules:
++        return None
++    try:
++        from IPython import get_ipython
++    except ImportError:
++        return None
++    shell = get_ipython()
++    return None if shell is None else shell.user_ns
++
++
+ def task_args(argv: Any = None) -> list:
+-    """The workflow task's arguments after ``--``; empty in Jupyter and for direct runs without them.
++    """The workflow task's arguments: after ``--`` on the command line, or the notebook's ``TASK_ARGS`` in Jupyter.
+ 
+     Args:
+-        argv: Optional argument list; defaults to ``sys.argv[1:]``.
++        argv: Optional argument list; defaults to ``sys.argv[1:]`` (or ``TASK_ARGS`` in Jupyter).
+ 
+     Returns:
+-        The arguments after the first ``--``, unchanged.
++        The arguments, unchanged; ``[]`` when there are none.
++
++    Raises:
++        TaskArgumentError: ``TASK_ARGS`` is not a list of strings.
+     """
+     if argv is None and "ipykernel" in sys.modules:
+-        return []
++        # Never the kernel's own command line.
++        value = (_notebook_namespace() or {}).get(TASK_ARGS_VARIABLE, [])
++        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
++            raise TaskArgumentError(f"{TASK_ARGS_VARIABLE} must be a list of strings.")
++        return list(value)
+     return _split(argv)[1]
++
++
++def option_name(name: str) -> str:
++    """The option for a declared argument name: ``scale_factor`` -> ``--scale-factor``."""
++    return "--" + name.replace("_", "-")
++
++
++def _declaration_problems(declaration: Any) -> list:
++    if not isinstance(declaration, Mapping):
++        return ["the declaration must be a mapping of argument names to specs"]
++    problems, options = [], set()
++    for name, spec in declaration.items():
++        if not isinstance(name, str) or not ARGUMENT_NAME.fullmatch(name):
++            problems.append(f"invalid argument name {name!r}")
++            continue
++        if option_name(name) in options:
++            problems.append(f"argument {name!r} repeats an option")
++        options.add(option_name(name))
++        if not isinstance(spec, Mapping) or set(spec) - SPEC_KEYS:
++            problems.append(f"argument {name!r}: the spec may hold only 'required' and 'default'")
++            continue
++        if "required" in spec and not isinstance(spec["required"], bool):
++            problems.append(f"argument {name!r}: 'required' must be true or false")
++        if "default" in spec and not isinstance(spec["default"], str):
++            problems.append(f"argument {name!r}: 'default' must be a string")
++        if spec.get("required") and "default" in spec:
++            problems.append(f"argument {name!r}: a required argument has no default")
++    return problems
++
++
++def _usage(declaration: Mapping, prog: str) -> str:
++    names = sorted(declaration, key=lambda name: not declaration[name].get("required"))
++    parts = [f"{option_name(n)} {n.upper()}" if declaration[n].get("required") else f"[{option_name(n)} {n.upper()}]" for n in names]
++    return " ".join([f"usage: {prog}", *parts])
++
++
++def _parse_tokens(tokens: list, declaration: Mapping) -> tuple:
++    by_option = {option_name(name): name for name in declaration}
++    values, problems, index = {}, [], 0
++    while index < len(tokens):
++        token = tokens[index]
++        index += 1
++        if not token.startswith("--"):
++            problems.append(f"unexpected argument {token!r}")
++            continue
++        option, has_value, value = token.partition("=")
++        if option not in by_option:
++            problems.append(f"unknown option {option}")
++            if not has_value and index < len(tokens) and not tokens[index].startswith("-"):
++                index += 1
++            continue
++        if not has_value:
++            if index >= len(tokens) or tokens[index].startswith("-"):
++                problems.append(f"option {option} needs a value")
++                continue
++            value = tokens[index]
++            index += 1
++        name = by_option[option]
++        if name in values:
++            problems.append(f"option {option} is given twice")
++            continue
++        values[name] = value
++    return values, problems
++
++
++def _widget_values(widgets: Mapping, declaration: Mapping) -> tuple:
++    values, problems = {}, []
++    for name, widget in widgets.items():
++        if name not in declaration:
++            problems.append(f"widget {name!r} is not a declared argument")
++            continue
++        text = getattr(widget, "value", "")
++        if isinstance(text, str) and text != "":
++            values[name] = text
++    return values, problems
++
++
++def _program_name() -> str:
++    session = os.environ.get("JPY_SESSION_NAME") if "ipykernel" in sys.modules else None
++    return Path(session or sys.argv[0] or "job").name
++
++
++def parse_task_args(declaration: Mapping, argv: Any = None, prog: Optional[str] = None) -> Mapping:
++    """The job's declared task arguments, as strings; values are never converted or checked.
++
++    Each name in ``declaration`` maps to ``{"required": True}``, ``{"default": "<text>"}``
++    or ``{}``; ``scale_factor`` is given as ``--scale-factor value`` or ``--scale-factor=value``.
++    The values come from the command line after ``--`` (Airflow), or in Jupyter from
++    the notebook's input widgets when there are any, else from its ``TASK_ARGS``.
++
++    Args:
++        declaration: The job's argument names and specs.
++        argv: Optional task arguments (what follows ``--``) instead of the context's source.
++        prog: Optional program name for the usage line.
++
++    Returns:
++        A read-only mapping of every declared name to its value, its default, or None.
++
++    Raises:
++        TaskArgumentError: The declaration is invalid, or, in Jupyter, the arguments are.
++        SystemExit: With status 2 and the problems on stderr, outside Jupyter.
++    """
++    problems = _declaration_problems(declaration)
++    if problems:
++        raise TaskArgumentError("Invalid task argument declaration: " + "; ".join(problems))
++    namespace = _notebook_namespace() if argv is None else None
++    widgets = (namespace or {}).get(WIDGETS_VARIABLE)
++    if isinstance(widgets, Mapping) and widgets:
++        values, problems = _widget_values(widgets, declaration)
++    else:
++        try:
++            tokens = task_args() if argv is None else list(argv)
++        except TaskArgumentError as error:
++            tokens, problems = [], [str(error)]
++        values, token_problems = _parse_tokens(tokens, declaration)
++        problems += token_problems
++    problems += [f"option {option_name(name)} is required" for name, spec in declaration.items() if spec.get("required") and name not in values]
++    if problems:
++        message = "\n".join([*problems, _usage(declaration, prog or _program_name())])
++        if "ipykernel" in sys.modules:
++            raise TaskArgumentError(message)
++        print(message, file=sys.stderr)
++        raise SystemExit(2)
++    return MappingProxyType({name: values.get(name, spec.get("default")) for name, spec in declaration.items()})
+diff --git a/notebooks/common/job_runtime.py b/notebooks/common/job_runtime.py
+index 3ad1d89..f3d7634 100644
+--- a/notebooks/common/job_runtime.py
++++ b/notebooks/common/job_runtime.py
+@@ -1,95 +1,68 @@
+-"""Shared startup helpers for Jupyter and spark-submit workloads."""
++"""Start a workload: this repository's environment config, then the platform's Spark session.
++
++The lakehouse platform owns the Spark session (catalogs, token source, redaction):
++``lakehouse_spark`` is on the Python path of both its images. This repository
++owns its configuration: every key of ``configs/<env>.yml`` reaches the job.
++"""
+ 
+ import os
+ import sys
+-from argparse import Namespace
+ from typing import Any
+ 
+ from .cli import parse_args
+-from .config_loader import EnvironmentConfig, load_environment_config
+-
+-CATALOGS = {"lakehouse": "lakehouse", "lakehouse_uat": "lakehouse_uat", "lakehouse_dev": "lakehouse_dev"}
+-AUTH_MANAGER = "local.lakehouse.spark.auth.LakehouseTokenAuthManager"
+-
+-
+-def _select_token_provider() -> None:
+-    """Select one broker adapter and seed its initial JWT in process memory."""
+-    provider = os.environ.get("LAKEHOUSE_TOKEN_PROVIDER")
+-    if provider == "airflow":
+-        required = (
+-            "LAKEHOUSE_INITIAL_ACCESS_TOKEN",
+-            "LAKEHOUSE_TOKEN_BROKER_URL",
+-            "LAKEHOUSE_TOKEN_BROKER_CA",
+-            "LAKEHOUSE_RUN_HANDLE",
+-            "LAKEHOUSE_RUN_CAPABILITY",
+-        )
+-        if any(not os.environ.get(key) for key in required):
+-            raise RuntimeError("Airflow Spark token renewal is missing required run-scoped configuration.")
+-        return
+-    if provider not in (None, "jupyter"):
+-        raise RuntimeError("Unsupported Lakehouse token provider.")
+-
+-    if "ipykernel" in sys.modules or provider == "jupyter":
+-        if not os.environ.get("JUPYTERHUB_API_TOKEN"):
+-            raise RuntimeError("The authenticated JupyterHub server token is unavailable.")
+-        from lakehouse_broker_client import request_user_token
+-
+-        broker_token = request_user_token()
+-        os.environ["LAKEHOUSE_TOKEN_PROVIDER"] = "jupyter"  # nosec B105 - provider selector, not a credential.
+-        os.environ["LAKEHOUSE_INITIAL_ACCESS_TOKEN"] = broker_token.access_token
+-        os.environ.setdefault("LAKEHOUSE_TOKEN_BROKER_URL", "https://jupyterhub:8443/api/v1/token")
+-        os.environ.setdefault("LAKEHOUSE_TOKEN_BROKER_CA", "/run/certs/jupyterhub-broker-ca.crt")
+-        return
+-    raise RuntimeError("Set an authenticated JupyterHub or Airflow token provider before starting Spark.")
+-
+-
+-def _configure_rest_catalogs(builder: Any, default_catalog: str) -> Any:
+-    if default_catalog not in CATALOGS:
+-        raise RuntimeError("The environment selected an unsupported Polaris catalog.")
+-    builder = builder.config("spark.sql.defaultCatalog", default_catalog)
+-    for catalog, warehouse in CATALOGS.items():
+-        prefix = f"spark.sql.catalog.{catalog}"
+-        settings = {
+-            "": "org.apache.iceberg.spark.SparkCatalog",
+-            ".type": "rest",
+-            ".uri": "http://polaris:8181/api/catalog",
+-            ".warehouse": warehouse,
+-            ".rest.auth.type": AUTH_MANAGER,
+-            ".io-impl": "org.apache.iceberg.aws.s3.S3FileIO",
+-            ".header.Polaris-Realm": "lakehouse",
+-            ".header.X-Iceberg-Access-Delegation": "vended-credentials",
+-        }
+-        for suffix, value in settings.items():
+-            builder = builder.config(prefix + suffix, value)
+-    return builder
++from .config_loader import SUPPORTED_ENVIRONMENTS, EnvironmentConfig, load_environment_config
++
++JUPYTER_DEFAULT_ENVIRONMENT = "dev"
++
++
++def jupyter_environment(environ: Any = None) -> str:
++    """The environment a Jupyter notebook works in: ``LAKEHOUSE_ENVIRONMENT``, ``dev`` when unset.
++
++    Args:
++        environ: Optional mapping instead of ``os.environ``.
++
++    Returns:
++        ``dev``, ``uat`` or ``prod``.
++
++    Raises:
++        ValueError: The variable holds another value.
++    """
++    value = (os.environ if environ is None else environ).get("LAKEHOUSE_ENVIRONMENT") or JUPYTER_DEFAULT_ENVIRONMENT
++    if value not in SUPPORTED_ENVIRONMENTS:
++        supported = ", ".join(sorted(SUPPORTED_ENVIRONMENTS))
++        raise ValueError(f"LAKEHOUSE_ENVIRONMENT is {value!r}; expected one of: {supported}.")
++    return value
+ 
+ 
+ def start_spark_job(app_name: str, argv: Any = None) -> tuple[Any, EnvironmentConfig]:
+-    """Load environment settings and start a broker-authenticated Spark session."""
++    """Load the environment config and start the platform's Spark session.
++
++    In Jupyter, the environment comes from ``jupyter_environment()`` and the
++    shared ``configs/<env>.yml`` of this clone is used. Elsewhere (``spark-submit``
++    in Airflow), ``--environment`` and ``--config-dir`` are parsed, and the
++    product the platform sets in ``LAKEHOUSE_PRODUCT`` selects
++    ``configs/<product>/<env>.yml`` when it exists.
++
++    Args:
++        app_name: The job's name; the Spark application is ``<env>-<app_name>``.
++        argv: Optional argument list instead of ``sys.argv[1:]``.
++
++    Returns:
++        ``(spark, config)``.
++
++    Raises:
++        ValueError: The config has no ``catalog_name``, or the environment is invalid.
++    """
+     if "ipykernel" in sys.modules:
+-        args = Namespace(
+-            environment=os.environ.get("LAKEHOUSE_ENVIRONMENT", "dev"),
+-            config_dir=os.environ.get("LAKEHOUSE_CONFIG_DIR"),
+-        )
++        environment, config_dir, product = jupyter_environment(), None, None
+     else:
+         args = parse_args(argv)
++        environment, config_dir, product = args.environment, args.config_dir, os.environ.get("LAKEHOUSE_PRODUCT") or None
++    config = load_environment_config(environment, config_dir, product)
++    catalog = config.get("catalog_name")
++    if not isinstance(catalog, str) or not catalog:
++        raise ValueError(f"The {environment} config has no catalog_name; it selects the Polaris catalog.")
++
++    from lakehouse_spark import create_spark_session
+ 
+-    config_dir = args.config_dir
+-    if config_dir == "spark-files":
+-        # spark-submit does not initialize SparkFiles until SparkContext exists,
+-        # but the catalog selection is needed before SparkSession startup.
+-        # Airflow already mounts the selected Bundle, so use its config folder.
+-        config_dir = os.environ.get("LAKEHOUSE_BUNDLE_CONFIG_DIR", "/opt/lakehouse-bundle/configs")
+-    # Set on the Spark container for data product bundles; selects configs/<product>/ when present.
+-    config = load_environment_config(args.environment, config_dir, os.environ.get("LAKEHOUSE_PRODUCT") or None)
+-    _select_token_provider()
+-
+-    from pyspark.sql import SparkSession
+-
+-    spark = (
+-        _configure_rest_catalogs(SparkSession.builder.appName(f"{args.environment}-{app_name}"), config["catalog_name"])
+-        .config("spark.redaction.regex", r"(?i)secret|password|token|access[.]?key|credential")
+-        .config("spark.sql.redaction.options.regex", r"(?i)secret|password|token|access[.]?key|credential")
+-        .getOrCreate()
+-    )
+-    return spark, config
++    return create_spark_session(f"{environment}-{app_name}", catalog), config
+diff --git a/notebooks/common/jupyter_environment_resolver.py b/notebooks/common/jupyter_environment_resolver.py
+new file mode 100644
+index 0000000..9417b85
+--- /dev/null
++++ b/notebooks/common/jupyter_environment_resolver.py
+@@ -0,0 +1,55 @@
++"""Jupyter start-up: this clone's configuration and the platform's Spark session.
++
++Run it from a notebook in ``notebooks/workload/``::
++
++    # %env LAKEHOUSE_ENVIRONMENT=uat          (optional; dev when unset)
++    # %run ../common/jupyter_environment_resolver.py
++
++It finds the repository clone that holds the notebook, puts it on the import
++path, and defines ``spark``, ``config`` and ``repository_root`` in the notebook.
++The Spark application is ``<env>-<notebook name>``. Imported as a module (as
++Airflow runs and tests do), it only defines functions.
++"""
++
++import os
++import sys
++from pathlib import Path
++from typing import Any, Optional
++
++MARKER = Path("notebooks") / "common" / "job_runtime.py"
++
++
++def find_repository_root(start: Path) -> Path:
++    """The nearest folder at or above ``start`` holding ``notebooks/common/job_runtime.py`` and ``configs/``.
++
++    Raises:
++        FileNotFoundError: The notebook is not inside a clone of the repository.
++    """
++    start = Path(start).resolve()
++    for candidate in (start, *start.parents):
++        if (candidate / MARKER).is_file() and (candidate / "configs").is_dir():
++            return candidate
++    raise FileNotFoundError("Open the notebook inside a clone of the data product repository.")
++
++
++def notebook_name(environ: Optional[Any] = None) -> str:
++    """The notebook's file name without extension, from Jupyter's ``JPY_SESSION_NAME``; ``notebook`` when unknown."""
++    session = (os.environ if environ is None else environ).get("JPY_SESSION_NAME")
++    return Path(session).stem if session else "notebook"
++
++
++def resolve(start: Optional[Path] = None) -> tuple:
++    """Start the notebook's Spark session with this clone's config; returns ``(spark, config, repository_root)``."""
++    root = find_repository_root(Path.cwd() if start is None else start)
++    if str(root) not in sys.path:
++        sys.path.insert(0, str(root))
++    from notebooks.common.job_runtime import jupyter_environment, start_spark_job
++
++    environment = jupyter_environment()
++    spark, config = start_spark_job(notebook_name())
++    print(f"Lakehouse environment {environment}: {root / 'configs' / (environment + '.yml')}")
++    return spark, config, root
++
++
++if __name__ == "__main__" and "ipykernel" in sys.modules:
++    spark, config, repository_root = resolve()
+diff --git a/notebooks/common/jupyter_input_widget_helper.py b/notebooks/common/jupyter_input_widget_helper.py
+new file mode 100644
+index 0000000..661c408
+--- /dev/null
++++ b/notebooks/common/jupyter_input_widget_helper.py
+@@ -0,0 +1,69 @@
++"""Jupyter input widgets for a job's task arguments.
++
++Run it from a notebook after listing the arguments::
++
++    WIDGET_LIST = ["entity", "scale_factor"]
++    # %run ../common/jupyter_input_widget_helper.py
++
++It shows one text field per name. ``notebooks.common.cli.parse_task_args`` then
++reads their text (an empty field means not given), as Airflow passes the
++workflow's ``args``. Running it again keeps what was typed. It also puts its own
++clone on the import path, so a job that starts no Spark session can import
++``notebooks.common``. Imported as a module, it only defines functions.
++"""
++
++import re
++import sys
++from pathlib import Path
++from typing import Any, Callable, Mapping
++
++# The same notebook variable and name rule as notebooks.common.cli (kept here so this
++# script also works before the environment resolver has put the clone on the path).
++WIDGETS_VARIABLE = "LAKEHOUSE_WIDGETS"
++WIDGET_NAME = re.compile(r"[a-z][a-z0-9_]{0,49}")
++
++
++def check_widget_list(value: Any) -> list:
++    """``WIDGET_LIST`` as a list of distinct argument names.
++
++    Raises:
++        ValueError: It is missing, not a list, or holds an invalid or repeated name.
++    """
++    if not isinstance(value, list) or not value:
++        raise ValueError('Define WIDGET_LIST as a list of argument names first, for example WIDGET_LIST = ["entity"].')
++    invalid = [name for name in value if not isinstance(name, str) or not WIDGET_NAME.fullmatch(name)]
++    if invalid:
++        raise ValueError(f"WIDGET_LIST holds invalid names: {invalid!r}; use lowercase letters, digits and underscores.")
++    if len(set(value)) != len(value):
++        raise ValueError("WIDGET_LIST holds a name twice.")
++    return list(value)
++
++
++def build_widgets(names: list, existing: Mapping, make: Callable[[str], Any]) -> dict:
++    """The widgets for ``names``, in order: existing ones keep their text, new ones come from ``make``."""
++    return {name: existing[name] if name in existing else make(name) for name in names}
++
++
++def show_widgets(namespace: dict) -> dict:
++    """Create or update the notebook's widgets from its ``WIDGET_LIST`` and display them."""
++    names = check_widget_list(namespace.get("WIDGET_LIST"))
++    import ipywidgets
++    from IPython.display import display
++
++    def make(name: str) -> Any:
++        return ipywidgets.Text(description=name, style={"description_width": "initial"})
++
++    widgets = build_widgets(names, namespace.get(WIDGETS_VARIABLE) or {}, make)
++    namespace[WIDGETS_VARIABLE] = widgets
++    display(ipywidgets.VBox(list(widgets.values())))
++    return widgets
++
++
++if __name__ == "__main__" and "ipykernel" in sys.modules:
++    from IPython import get_ipython
++
++    # %run sets __file__: this clone is <clone>/notebooks/common/<this file>.
++    _clone = str(Path(__file__).resolve().parents[2])
++    if _clone not in sys.path:
++        sys.path.insert(0, _clone)
++    show_widgets(get_ipython().user_ns)
+diff --git a/notebooks/workload/count_sample_rows.py b/notebooks/workload/count_sample_rows.py
+index 0c05609..a11e97a 100644
+--- a/notebooks/workload/count_sample_rows.py
++++ b/notebooks/workload/count_sample_rows.py
+@@ -8,8 +8,8 @@
+ # %% [markdown]
+ # ## Start Spark and load the environment configuration
+ #
+-# In Jupyter, the helper selects the `dev` configuration and exposes `spark`
+-# and `config`. In Airflow, `spark-submit` starts the session using the
++# In Jupyter, the environment resolver selects `dev` (or `LAKEHOUSE_ENVIRONMENT`)
++# and exposes `spark` and `config`. In Airflow, `spark-submit` starts the session using the
+ # environment and config directory passed by the DAG.
+ 
+ # %%
+@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
+ 
+ 
+ # %%
+-# %run ./jupyter_helper.py
++# %run ../common/jupyter_environment_resolver.py
+ 
+ # %% [markdown]
+ # ## Count the table rows
+@@ -59,10 +59,8 @@ def count_sample_rows(spark: Any, config: Mapping[str, Any]) -> int:
+ # ## Run the count and stop Spark
+ 
+ # %%
+-if __name__ == "__main__" and "airflow" not in sys.modules:
+-    # Airflow's bundle parser scans repository Python files as well as dags/;
+-    # it may execute this module as __main__, but must never invoke the Spark
+-    # CLI parser while discovering DAGs.
++if __name__ == "__main__":
++    # Importing this workload from pytest must not start Spark or parse arguments.
+     if "ipykernel" not in sys.modules:
+         from notebooks.common.job_runtime import start_spark_job
+ 
+diff --git a/notebooks/workload/generate_tpch.py b/notebooks/workload/generate_tpch.py
+index 7e9828b..cdf3367 100644
+--- a/notebooks/workload/generate_tpch.py
++++ b/notebooks/workload/generate_tpch.py
+@@ -8,12 +8,12 @@
+ #
+ # In Airflow, `workflows/generate_tpch.json` runs it once per entity with
+ # `--entity <name>` after `--`; `--scale-factor` is optional (default 0.01).
+-# In Jupyter, run `lakehouse-install-requirements` once, restart the kernel, and
+-# set `ENTITY` and `SCALE_FACTOR` below. DuckDB downloads its `tpch` extension
+-# the first time it is used, so the first run needs network access.
++# In Jupyter, run `lakehouse-install-requirements` once per server start and
++# restart the kernel; then run the widget cell below, fill in `entity` (and,
++# optionally, `scale_factor`), and run the remaining cells. DuckDB downloads its
++# `tpch` extension the first time it is used, so the first run needs network access.
+ 
+ # %%
+-import argparse
+ import logging
+ import sys
+ from decimal import Decimal, InvalidOperation
+@@ -25,13 +25,19 @@ logging.basicConfig(
+ logger = logging.getLogger(__name__)
+ 
+ # %% [markdown]
+-# ## Settings for Jupyter
++# ## Task arguments
+ #
+-# Airflow passes these as task arguments instead.
++# The same declaration serves both places: Airflow passes the workflow's `args`
++# (`--entity orders`); in Jupyter the input widgets below hold the values (or a
++# `TASK_ARGS` list, when there are no widgets). The common parser only reads them;
++# this notebook checks them (`check_arguments`).
+ 
+ # %%
+-ENTITY = "lineitem"
+-SCALE_FACTOR = "0.01"
++TASK_ARGUMENTS = {"entity": {"required": True}, "scale_factor": {"default": "0.01"}}
++WIDGET_LIST = ["entity", "scale_factor"]
++
++# %%
++# %run ../common/jupyter_input_widget_helper.py
+ 
+ # %% [markdown]
+ # ## TPC-H rules
+@@ -105,20 +111,22 @@ def check_count(entity: str, scale_factor: Decimal, count: int, orders_count: in
+         raise RuntimeError(f"TPC-H {entity} at scale factor {scale_factor}: {count} rows, expected {expected}")
+ 
+ 
+-def parse_task_args(args: list) -> tuple:
+-    """The entity and scale factor from the workflow task's arguments (after ``--``).
++def check_arguments(arguments: dict) -> tuple:
++    """The entity and the scale factor from the parsed task arguments, checked against the TPC-H rules.
++
++    Args:
++        arguments: The mapping from ``parse_task_args(TASK_ARGUMENTS)``.
+ 
+-    Exits with status 2 and a usage message for invalid arguments.
++    Returns:
++        ``(entity, scale_factor)``.
++
++    Raises:
++        ValueError: The entity is not a TPC-H entity, or the scale factor breaks ``parse_scale_factor``.
+     """
+-    parser = argparse.ArgumentParser(prog="generate_tpch.py", description="Generate TPC-H data and count one entity.")
+-    parser.add_argument("--entity", required=True, choices=ENTITIES)
+-    parser.add_argument("--scale-factor", default="0.01")
+-    parsed = parser.parse_args(args)
+-    try:
+-        scale_factor = parse_scale_factor(parsed.scale_factor)
+-    except ValueError as error:
+-        parser.error(str(error))
+-    return parsed.entity, scale_factor
++    entity = arguments["entity"]
++    if entity not in ENTITIES:
++        raise ValueError(f"unknown TPC-H entity {entity!r}; expected one of {', '.join(ENTITIES)}")
++    return entity, parse_scale_factor(arguments["scale_factor"])
+ 
+ 
+ # %% [markdown]
+@@ -150,10 +158,13 @@ def generate_tpch(entity: str, scale_factor: Decimal) -> int:
+ # %%
+ if __name__ == "__main__":
+     # Importing this workload from pytest must not parse the caller's arguments.
+-    if "ipykernel" in sys.modules:
+-        entity, scale_factor = ENTITY, parse_scale_factor(SCALE_FACTOR)
+-    else:
+-        from notebooks.common.cli import task_args
++    from notebooks.common.cli import parse_task_args
+ 
+-        entity, scale_factor = parse_task_args(task_args())
++    try:
++        entity, scale_factor = check_arguments(parse_task_args(TASK_ARGUMENTS, prog="generate_tpch.py"))
++    except ValueError as error:
++        if "ipykernel" in sys.modules:
++            raise
++        print(f"generate_tpch.py: {error}", file=sys.stderr)
++        raise SystemExit(2) from None
+     generate_tpch(entity, scale_factor)
+diff --git a/notebooks/workload/jupyter_helper.py b/notebooks/workload/jupyter_helper.py
+deleted file mode 100644
+index 8c6b75f..0000000
+--- a/notebooks/workload/jupyter_helper.py
++++ /dev/null
+@@ -1,26 +0,0 @@
+-# %% [markdown]
+-# # Jupyter startup helper
+-#
+-# Run this script from `init_environment.py` with `%run ./jupyter_helper.py`.
+-# It locates the repository, selects the development config, starts Spark, and
+-# exposes `spark` and `config` in the calling notebook's namespace.
+-
+-# %%
+-import os
+-import sys
+-from pathlib import Path
+-
+-working_directory = Path(os.getcwd()).resolve()
+-repository_root = next(
+-    (candidate for candidate in (working_directory, *working_directory.parents) if (candidate / "notebooks" / "common" / "job_runtime.py").is_file() and (candidate / "configs" / "dev.yml").is_file()),
+-    None,
+-)
+-if repository_root is None:
+-    raise FileNotFoundError("Start Jupyter from the lakehouse repository or one of its subdirectories.")
+-
+-sys.path.insert(0, str(repository_root))
+-os.environ["LAKEHOUSE_ENVIRONMENT"] = "dev"
+-
+-from notebooks.common.job_runtime import start_spark_job
+-
+-spark, config = start_spark_job("init_environment")
+diff --git a/notebooks/workload/test_environment.py b/notebooks/workload/test_environment.py
+index a59b2f9..91a5539 100644
+--- a/notebooks/workload/test_environment.py
++++ b/notebooks/workload/test_environment.py
+@@ -9,7 +9,7 @@
+ # %% [markdown]
+ # ## Imports
+ #
+-# Jupyter startup is delegated to `jupyter_helper.py` below. In a regular
++# Jupyter start-up is delegated to `../common/jupyter_environment_resolver.py` below. In a regular
+ # `spark-submit` run, the DAG supplies the repository root on `PYTHONPATH`.
+ 
+ # %%
+@@ -28,13 +28,14 @@ logger = logging.getLogger(__name__)
+ # %% [markdown]
+ # ## Select the environment and start Spark
+ #
+-# In a Jupyter kernel, set `LAKEHOUSE_ENVIRONMENT` to `dev`, `uat`, or `prod`
+-# before running the helper; it presets `dev`. The `%run` line is a Jupytext
++# In a Jupyter kernel, the resolver uses `dev` unless `LAKEHOUSE_ENVIRONMENT` is
++# set to `uat` or `prod` first, for example with `%env LAKEHOUSE_ENVIRONMENT=uat`
++# (a new environment needs a kernel restart). The `%run` line is a Jupytext
+ # magic: it becomes active in Jupyter and remains a comment in this Python
+-# script, so Spark-submit skips it.
++# script, so spark-submit skips it.
+ 
+ # %%
+-# %run ./jupyter_helper.py
++# %run ../common/jupyter_environment_resolver.py
+ 
+ # %% [markdown]
+ # ## Workload settings and operations
+diff --git a/tests/workload_foundation/test_generate_tpch.py b/tests/workload_foundation/test_generate_tpch.py
+index 72e6d1c..330b325 100644
+--- a/tests/workload_foundation/test_generate_tpch.py
++++ b/tests/workload_foundation/test_generate_tpch.py
+@@ -8,7 +8,9 @@ from pathlib import Path
+ import pytest
+ from hypothesis import given, seed, settings, strategies as st
+ 
+-from generate_tpch import BASE_COUNTS, ENTITIES, check_count, expected_count, generate_tpch, parse_scale_factor, parse_task_args
++from generate_tpch import BASE_COUNTS, ENTITIES, TASK_ARGUMENTS, WIDGET_LIST, check_arguments, check_count, expected_count, generate_tpch, parse_scale_factor
++
++from notebooks.common.cli import parse_task_args
+ 
+ HYPOTHESIS_SEED = int(os.environ.get("HYPOTHESIS_SEED", "0"))
+ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+@@ -17,12 +19,15 @@ COUNTS_AT_0_01 = {"region": 5, "nation": 25, "supplier": 100, "customer": 1500,
+ 
+ 
+ def test_task_arguments_need_an_entity_and_default_to_scale_factor_0_01():
+-    assert parse_task_args(["--entity", "orders"]) == ("orders", Decimal("0.01"))
+-    assert parse_task_args(["--entity", "lineitem", "--scale-factor", "0.1"]) == ("lineitem", Decimal("0.1"))
+-    for args in ([], ["--entity", "lineitems"], ["--entity", "orders", "--scale-factor", "2"]):
+-        with pytest.raises(SystemExit) as error:
+-            parse_task_args(args)
+-        assert error.value.code == 2
++    assert check_arguments(parse_task_args(TASK_ARGUMENTS, ["--entity", "orders"])) == ("orders", Decimal("0.01"))
++    assert check_arguments(parse_task_args(TASK_ARGUMENTS, ["--entity", "lineitem", "--scale-factor", "0.1"])) == ("lineitem", Decimal("0.1"))
++    with pytest.raises(SystemExit) as error:
++        parse_task_args(TASK_ARGUMENTS, [])
++    assert error.value.code == 2
++    for args in (["--entity", "lineitems"], ["--entity", "orders", "--scale-factor", "2"]):
++        with pytest.raises(ValueError):  # the notebook's own checks; the common parser doesn't check values
++            check_arguments(parse_task_args(TASK_ARGUMENTS, args))
++    assert WIDGET_LIST == list(TASK_ARGUMENTS)
+ 
+ 
+ @pytest.mark.parametrize("text", ["0", "-0.01", "1.001", "0.0005", "0.0101", "abc", "NaN", "Infinity", ""])
+diff --git a/tests/workload_foundation/test_job_runtime.py b/tests/workload_foundation/test_job_runtime.py
+new file mode 100644
+index 0000000..c21a9af
+--- /dev/null
++++ b/tests/workload_foundation/test_job_runtime.py
+@@ -0,0 +1,87 @@
++"""start_spark_job: this repository's config, then the platform's lakehouse_spark (BR-J1 to BR-J5; P7)."""
++
++import sys
++import types
++from pathlib import Path
++
++import pytest
++from hypothesis import given, settings, strategies as st
++
++from notebooks.common import job_runtime
++
++REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
++
++
++@pytest.fixture
++def platform(monkeypatch):
++    """A fake lakehouse_spark that records how the session was requested."""
++    calls = []
++    module = types.ModuleType("lakehouse_spark")
++    module.create_spark_session = lambda app_name, catalog: calls.append((app_name, catalog)) or "spark"
++    monkeypatch.setitem(sys.modules, "lakehouse_spark", module)
++    monkeypatch.delenv("LAKEHOUSE_PRODUCT", raising=False)
++    monkeypatch.delenv("LAKEHOUSE_ENVIRONMENT", raising=False)
++    return calls
++
++
++def write_config(directory: Path, name: str, **extra):
++    directory.mkdir(parents=True, exist_ok=True)
++    lines = ["storage_path: s3a://bucket-default-uat/", "database_name: default_lhuat", "catalog_name: lakehouse_uat"]
++    lines += [f"{key}: {value}" for key, value in extra.items()]
++    (directory / name).write_text("\n".join(lines) + "\n")
++
++
++def test_airflow_passes_the_config_through_and_hands_only_the_catalog_to_the_platform(platform, tmp_path, monkeypatch):
++    write_config(tmp_path, "uat.yml", source_dataset="raw.orders_uat")
++    write_config(tmp_path / "sales", "uat.yml", source_dataset="raw.sales_uat")
++    spark, config = job_runtime.start_spark_job("load", ["--environment", "uat", "--config-dir", str(tmp_path)])
++    assert spark == "spark" and platform == [("uat-load", "lakehouse_uat")]
++    assert config["source_dataset"] == "raw.orders_uat"
++    monkeypatch.setenv("LAKEHOUSE_PRODUCT", "sales")
++    _, config = job_runtime.start_spark_job("load", ["--environment", "uat", "--config-dir", str(tmp_path)])
++    assert config["source_dataset"] == "raw.sales_uat"  # the product folder, as the platform selects it
++
++
++def test_jupyter_uses_dev_or_the_chosen_environment_and_ignores_the_product(platform, monkeypatch):
++    monkeypatch.setitem(sys.modules, "ipykernel", types.ModuleType("ipykernel"))
++    monkeypatch.setenv("LAKEHOUSE_PRODUCT", "sales")
++    _, config = job_runtime.start_spark_job("generate_tpch")
++    assert config.environment == "dev" and platform[-1] == ("dev-generate_tpch", "lakehouse_dev")
++    monkeypatch.setenv("LAKEHOUSE_ENVIRONMENT", "uat")
++    _, config = job_runtime.start_spark_job("generate_tpch")
++    assert config.environment == "uat" and platform[-1] == ("uat-generate_tpch", "lakehouse_uat")
++
++
++def test_a_config_without_catalog_name_is_refused(platform, tmp_path):
++    (tmp_path / "uat.yml").write_text("storage_path: s3a://b/\ndatabase_name: d\n")
++    with pytest.raises(ValueError, match="no catalog_name"):
++        job_runtime.start_spark_job("load", ["--environment", "uat", "--config-dir", str(tmp_path)])
++    assert platform == []
++
++
++def test_the_repository_holds_no_platform_session_settings():
++    source = (REPOSITORY_ROOT / "notebooks/common/job_runtime.py").read_text()
++    for platform_detail in (
++        "polaris:8181",
++        "spark.sql.catalog",
++        "LakehouseTokenAuthManager",
++        "redaction.regex",
++        "LAKEHOUSE_TOKEN_",
++        "spark-files",
++        "LAKEHOUSE_CONFIG_DIR",
++        "LAKEHOUSE_BUNDLE_CONFIG_DIR",
++    ):
++        assert platform_detail not in source
++
++
++@settings(max_examples=200, print_blob=True)
++@given(st.one_of(st.none(), st.sampled_from(["dev", "uat", "prod", "", "DEV", "staging", "prod "]), st.text(max_size=8)))
++def test_p7_only_dev_uat_and_prod_are_jupyter_environments(value):
++    environ = {} if value is None else {"LAKEHOUSE_ENVIRONMENT": value}
++    if value in (None, ""):
++        assert job_runtime.jupyter_environment(environ) == "dev"
++    elif value in ("dev", "uat", "prod"):
++        assert job_runtime.jupyter_environment(environ) == value
++    else:
++        with pytest.raises(ValueError):
++            job_runtime.jupyter_environment(environ)
+diff --git a/tests/workload_foundation/test_jupyter_scripts.py b/tests/workload_foundation/test_jupyter_scripts.py
+new file mode 100644
+index 0000000..8e15d81
+--- /dev/null
++++ b/tests/workload_foundation/test_jupyter_scripts.py
+@@ -0,0 +1,51 @@
++"""The Jupyter %run scripts in notebooks/common: inert on import, and their rules (BR-R, BR-W)."""
++
++import types
++from pathlib import Path
++
++import pytest
++
++from notebooks.common import cli, jupyter_environment_resolver as resolver, jupyter_input_widget_helper as widgets
++
++REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
++
++
++def test_the_resolver_finds_the_clone_that_holds_the_notebook(tmp_path):
++    assert resolver.find_repository_root(REPOSITORY_ROOT / "notebooks" / "workload") == REPOSITORY_ROOT
++    with pytest.raises(FileNotFoundError, match="inside a clone"):
++        resolver.find_repository_root(tmp_path)
++
++
++def test_the_spark_application_takes_the_notebook_name():
++    assert resolver.notebook_name({"JPY_SESSION_NAME": "/home/jovyan/work/repo/notebooks/workload/generate_tpch.py"}) == "generate_tpch"
++    assert resolver.notebook_name({"JPY_SESSION_NAME": "/x/Untitled1.ipynb"}) == "Untitled1"
++    assert resolver.notebook_name({}) == "notebook"
++
++
++def test_importing_the_scripts_starts_nothing():
++    assert not hasattr(resolver, "spark") and not hasattr(widgets, "LAKEHOUSE_WIDGETS")
++
++
++@pytest.mark.parametrize("value", [None, [], "entity", ["Entity"], ["entity", "entity"], ["scale-factor"], [3]])
++def test_widget_list_must_be_distinct_argument_names(value):
++    with pytest.raises(ValueError):
++        widgets.check_widget_list(value)
++
++
++def test_widgets_keep_their_text_and_follow_the_list():
++    existing = {"entity": types.SimpleNamespace(value="orders"), "old": types.SimpleNamespace(value="x")}
++    built = widgets.build_widgets(["scale_factor", "entity"], existing, lambda name: types.SimpleNamespace(value=""))
++    assert list(built) == ["scale_factor", "entity"] and built["entity"] is existing["entity"] and "old" not in built
++
++
++def test_the_helper_and_the_parser_share_the_variable_and_name_rule():
++    assert widgets.WIDGETS_VARIABLE == cli.WIDGETS_VARIABLE
++    assert widgets.WIDGET_NAME.pattern == cli.ARGUMENT_NAME.pattern
++
++
++def test_entry_points_run_the_scripts_from_common():
++    for path in (REPOSITORY_ROOT / "notebooks/workload").glob("*.py"):
++        text = path.read_text()
++        assert "jupyter_helper" not in text
++        assert "# %run ./" not in text
++    assert not (REPOSITORY_ROOT / "notebooks/workload/jupyter_helper.py").exists()
+diff --git a/tests/workload_foundation/test_task_arguments.py b/tests/workload_foundation/test_task_arguments.py
+new file mode 100644
+index 0000000..0215c3e
+--- /dev/null
++++ b/tests/workload_foundation/test_task_arguments.py
+@@ -0,0 +1,179 @@
++"""Declared task arguments: the command line in Airflow, widgets or TASK_ARGS in Jupyter (P3 to P6)."""
++
++import os
++import sys
++import types
++
++import pytest
++from hypothesis import given, seed, settings, strategies as st
++
++from notebooks.common import cli
++
++HYPOTHESIS_SEED = int(os.environ.get("HYPOTHESIS_SEED", "0"))
++DECLARATION = {"entity": {"required": True}, "scale_factor": {"default": "0.01"}, "note": {}}
++
++
++@pytest.fixture
++def notebook(monkeypatch):
++    """A Jupyter kernel with a notebook namespace the parser reads."""
++    namespace = {}
++    monkeypatch.setitem(sys.modules, "ipykernel", types.ModuleType("ipykernel"))
++    monkeypatch.setattr(cli, "_notebook_namespace", lambda: namespace)
++    monkeypatch.setattr(sys, "argv", ["kernel", "--", "--entity", "from-the-kernel-argv"])
++    return namespace
++
++
++def widget(text):
++    return types.SimpleNamespace(value=text)
++
++
++def test_command_line_values_are_strings_and_defaults_fill_the_rest():
++    parsed = cli.parse_task_args(DECLARATION, ["--entity", "orders"])
++    assert dict(parsed) == {"entity": "orders", "scale_factor": "0.01", "note": None}
++    parsed = cli.parse_task_args(DECLARATION, ["--scale-factor=1e9", "--entity", "not-checked", "--note=--x"])
++    assert dict(parsed) == {"entity": "not-checked", "scale_factor": "1e9", "note": "--x"}  # values are never checked
++    with pytest.raises(TypeError):
++        parsed["entity"] = "x"
++
++
++def test_structural_problems_are_reported_together_and_exit_2(capsys):
++    with pytest.raises(SystemExit) as error:
++        cli.parse_task_args(DECLARATION, ["--entityy", "x", "stray", "--note", "a", "--note", "b", "--scale-factor"], prog="job.py")
++    assert error.value.code == 2
++    assert capsys.readouterr().err.splitlines() == [
++        "unknown option --entityy",
++        "unexpected argument 'stray'",
++        "option --note is given twice",
++        "option --scale-factor needs a value",
++        "option --entity is required",
++        "usage: job.py --entity ENTITY [--scale-factor SCALE_FACTOR] [--note NOTE]",
++    ]
++
++
++@pytest.mark.parametrize(
++    "declaration",
++    [
++        {"Entity": {}},
++        {"a-b": {}},
++        {"x": {"type": "int"}},
++        {"x": {"required": "yes"}},
++        {"x": {"default": 3}},
++        {"x": {"required": True, "default": "a"}},
++        ["entity"],
++    ],
++)
++def test_invalid_declarations_are_refused_before_parsing(declaration):
++    with pytest.raises(cli.TaskArgumentError, match="Invalid task argument declaration"):
++        cli.parse_task_args(declaration, [])
++
++
++def test_jupyter_reads_widgets_first_then_task_args_and_never_the_kernel_argv(notebook):
++    notebook["TASK_ARGS"] = ["--entity", "from-task-args"]
++    assert cli.parse_task_args(DECLARATION)["entity"] == "from-task-args"
++    notebook["LAKEHOUSE_WIDGETS"] = {"entity": widget("orders"), "scale_factor": widget("")}
++    assert dict(cli.parse_task_args(DECLARATION)) == {"entity": "orders", "scale_factor": "0.01", "note": None}
++    assert cli.task_args() == ["--entity", "from-task-args"]
++    del notebook["TASK_ARGS"]
++    assert cli.task_args() == []
++
++
++def test_jupyter_problems_raise_instead_of_ending_the_kernel(notebook, monkeypatch):
++    monkeypatch.setenv("JPY_SESSION_NAME", "/home/jovyan/work/repo/notebooks/workload/generate_tpch.py")
++    notebook["LAKEHOUSE_WIDGETS"] = {"entity": widget(""), "colour": widget("red")}
++    with pytest.raises(cli.TaskArgumentError) as error:
++        cli.parse_task_args(DECLARATION)
++    assert str(error.value).splitlines() == [
++        "widget 'colour' is not a declared argument",
++        "option --entity is required",
++        "usage: generate_tpch.py --entity ENTITY [--scale-factor SCALE_FACTOR] [--note NOTE]",
++    ]
++    notebook.clear()
++    notebook["TASK_ARGS"] = "--entity orders"
++    with pytest.raises(cli.TaskArgumentError, match="TASK_ARGS must be a list of strings"):
++        cli.parse_task_args(DECLARATION)
++
++
++# --- Properties ----------------------------------------------------------------------
++
++names = st.from_regex(r"[a-z][a-z0-9_]{0,12}", fullmatch=True)
++values = st.text(st.characters(categories=("L", "N", "P", "S", "Zs")), min_size=1, max_size=20)
++specs = st.sampled_from([{}, {"required": True}, {"default": "d"}])
++
++
++@st.composite
++def declared_values(draw):
++    declaration = draw(st.dictionaries(names, specs, min_size=1, max_size=6))
++    options = {cli.option_name(n) for n in declaration}
++    if len(options) != len(declaration):  # names equal after _ -> - are one option
++        declaration = {n: s for n, s in declaration.items() if "_" not in n} or {"entity": {}}
++    given_values = {n: draw(values) for n in declaration if declaration[n].get("required") or draw(st.booleans())}
++    return declaration, given_values
++
++
++def render(given_values, order, equals):
++    tokens = []
++    for name in order:
++        if name in given_values:
++            value = given_values[name]
++            tokens += [f"{cli.option_name(name)}={value}"] if equals or value.startswith("-") else [cli.option_name(name), value]
++    return tokens
++
++
++@seed(HYPOTHESIS_SEED)
++@settings(max_examples=150, print_blob=True)
++@given(declared_values(), st.data())
++def test_p3_rendered_arguments_parse_back_to_the_same_values(case, data):
++    declaration, given_values = case
++    order = data.draw(st.permutations(list(declaration)))
++    parsed = cli.parse_task_args(declaration, render(given_values, order, data.draw(st.booleans())))
++    assert dict(parsed) == {n: given_values.get(n, s.get("default")) for n, s in declaration.items()}
++
++
++@seed(HYPOTHESIS_SEED)
++@settings(max_examples=100, print_blob=True)
++@given(declared_values())
++def test_p4_widgets_task_args_and_the_command_line_agree(case):
++    declaration, given_values = case
++    from_line = cli.parse_task_args(declaration, render(given_values, list(declaration), True))
++    namespace = {"LAKEHOUSE_WIDGETS": {n: widget(given_values.get(n, "")) for n in declaration}}
++    original = cli._notebook_namespace
++    sys.modules.setdefault("ipykernel", types.ModuleType("ipykernel"))
++    try:
++        cli._notebook_namespace = lambda: namespace
++        from_widgets = cli.parse_task_args(declaration)
++        namespace.clear()
++        namespace["TASK_ARGS"] = render(given_values, list(declaration), False)
++        from_task_args = cli.parse_task_args(declaration)
++    finally:
++        cli._notebook_namespace = original
++        sys.modules.pop("ipykernel", None)
++    assert dict(from_line) == dict(from_widgets) == dict(from_task_args)
++
++
++@seed(HYPOTHESIS_SEED)
++@settings(max_examples=100, print_blob=True)
++@given(declared_values(), st.sampled_from(["unknown", "repeat", "drop_required"]), st.data())
++def test_p5_a_broken_argument_list_never_yields_a_result(case, breakage, data):
++    declaration, given_values = case
++    tokens = render(given_values, list(declaration), True)
++    if breakage == "unknown":
++        tokens.append("--zz-not-declared=1")
++    elif breakage == "repeat" and tokens:
++        tokens.append(tokens[0])
++    else:
++        required = [n for n, s in declaration.items() if s.get("required")]
++        if not required:
++            return
++        tokens = [t for t in tokens if not t.startswith(cli.option_name(required[0]) + "=")]
++    if breakage == "repeat" and not tokens:
++        return
++    with pytest.raises(SystemExit):
++        cli.parse_task_args(declaration, tokens)
++
++
++@seed(HYPOTHESIS_SEED)
++@settings(max_examples=200, print_blob=True)
++@given(names, names)
++def test_p6_option_names_are_one_to_one_except_for_underscore_and_hyphen(first, second):
++    assert cli.option_name(first).startswith("--") and cli.option_name(cli.option_name(first)[2:].replace("-", "_")) == cli.option_name(first)
++    assert (cli.option_name(first) == cli.option_name(second)) == (first.replace("_", "-") == second.replace("_", "-"))
+-- 
+2.55.0
+
+
+From 41ee812f5ac0412130cb4330456ad670262d503c Mon Sep 17 00:00:00 2001
+From: cdiogo1979 <cdiogo@gmail.com>
+Date: Tue, 10 Nov 2026 16:55:05 +0000
+Subject: [PATCH 2/3] Start every notebook with an Initialization section
+
+Each notebook in notebooks/workload/ now opens with two Jupyter-only
+cells: lakehouse-install-requirements for this repository's extras, and
+the environment resolver that starts Spark. Under spark-submit both are
+Jupytext comments. The README and AGENTS.md describe the section, and a
+test checks it in every notebook.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ AGENTS.md                                     |  2 +-
+ README.md                                     | 24 ++++++++++++---
+ notebooks/workload/count_sample_rows.py       | 25 ++++++++++++----
+ notebooks/workload/generate_tpch.py           | 20 +++++++++++--
+ notebooks/workload/test_environment.py        | 30 +++++++++++--------
+ .../test_jupyter_scripts.py                   | 12 ++++++++
+ 6 files changed, 87 insertions(+), 26 deletions(-)
+
+diff --git a/AGENTS.md b/AGENTS.md
+index b76e600..5dd957c 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -17,7 +17,7 @@ This is a lakehouse **data product repository**. [README.md](README.md) is the c
+ - **Entry points**:
+   - use `notebooks.common.job_runtime.start_spark_job(app_name)` for the config and the Spark session, and declare task arguments for `notebooks.common.cli.parse_task_args(...)` (workflow `args` after `--` in Airflow, widgets or `TASK_ARGS` in Jupyter; values are strings, never templated; check them in the job);
+   - never configure Spark catalogs, tokens or redaction here: the platform's `lakehouse_spark` does that;
+-  - in notebooks, run `%run ../common/jupyter_environment_resolver.py` (and `jupyter_input_widget_helper.py` after `WIDGET_LIST`);
++  - start every notebook in `notebooks/workload/` with the Initialization section (after the title cell): `# !lakehouse-install-requirements ~/work/opensource-lakehouse` and `# %run ../common/jupyter_environment_resolver.py`; use `jupyter_input_widget_helper.py` after `WIDGET_LIST` for task arguments;
+   - keep run code under `if __name__ == "__main__":` and stop Spark in `finally:`.
+ - **Configs**:
+   - the loader accepts only `dev`, `uat` and `prod`, requires `storage_path` and `database_name`, and never falls back across environments;
+diff --git a/README.md b/README.md
+index b72d59e..56b75b9 100644
+--- a/README.md
++++ b/README.md
+@@ -185,6 +185,7 @@ arguments = parse_task_args(TASK_ARGUMENTS)     # {"date": "2026-11-10", "mode":
+ 
+   `cli.task_args()` still returns the raw list (after `--`, or `TASK_ARGS` in Jupyter). Arguments are passed as a list and never go through a shell.
+ - **Environment variables** set in the Airflow container: `LAKEHOUSE_ENVIRONMENT` (`prod` or `uat`), `LAKEHOUSE_PRODUCT` (for example `default`), and `PYTHONPATH=/opt/lakehouse-bundle`, so `notebooks.common` imports work.
++- **Start every notebook with the Initialization section** (see [Working in Jupyter](#working-in-jupyter)): `# !lakehouse-install-requirements ~/work/opensource-lakehouse` and `# %run ../common/jupyter_environment_resolver.py`, right after the title cell. CI checks that every file in `notebooks/workload/` has it.
+ - **Stop Spark at the end**: call `spark.stop()` in a `finally:` block. Put the run code under `if __name__ == "__main__":` so tests and notebooks can import the file without starting Spark.
+ - **Packages**: entry points run on the platform's Python 3.10 environment plus this repository's `requirements.txt`; see [Python packages](#python-packages).
+ 
+@@ -231,9 +232,24 @@ Workload code runs on one Python environment, the same in Airflow's Spark contai
+ 
+ 1. Sign in to JupyterHub (<http://jupyterhub.localhost:8000>) with your platform account. You need to be a developer or analyst of the product.
+ 2. Clone this repository into your workspace and open a file from `notebooks/workload/` as a notebook. Jupytext reads the `py:percent` format.
+-3. Run the cells. `# %run ../common/jupyter_environment_resolver.py` finds the clone that holds the notebook, selects `dev`, and starts Spark with **your own** identity, so you see and write only what your groups allow (for a developer, read in `prod` and `uat`, write in `dev`). It defines `spark` and `config`.
++3. Run the **Initialization** section at the top of the notebook. Every notebook starts with it:
+ 
+-**Another environment**: run `%env LAKEHOUSE_ENVIRONMENT=uat` (or `prod`) before the resolver. A kernel that already has a session needs a restart to switch.
++   ```python
++   # %%
++   # !lakehouse-install-requirements ~/work/opensource-lakehouse
++
++   # %%
++   # %run ../common/jupyter_environment_resolver.py
++   ```
++
++   In the `.py` file both lines are comments (Jupytext's convention), so `spark-submit` in Airflow skips them; opened in Jupyter they become a shell command and a `%run`.
++   - The first cell installs this repository's `requirements.txt` extras. **After the first install in a server session, restart the kernel** and run all cells; later runs print `Nothing to add`.
++   - The second cell finds the clone that holds the notebook, selects `dev`, and starts Spark with **your own** identity, so you see and write only what your groups allow (for a developer, read in `prod` and `uat`, write in `dev`). It defines `spark` and `config`.
++4. Run the rest of the notebook.
++
++The path `~/work/opensource-lakehouse` assumes the clone is in `~/work`, as in step 2; adjust it if you cloned elsewhere.
++
++**Another environment**: run `%env LAKEHOUSE_ENVIRONMENT=uat` (or `prod`) before the Initialization section. A kernel that already has a session needs a restart to switch.
+ 
+ **Task arguments as widgets**: list the job's arguments, then run the widget helper; fill in the fields and run the job's cells:
+ 
+@@ -246,7 +262,7 @@ WIDGET_LIST = ["entity", "scale_factor"]
+ 
+ **The kernel**: the only kernel is **Lakehouse (Python 3.10)**, with the same packages as Airflow runs. Notebooks saved with an older kernel open with it.
+ 
+-**This repository's extras** (`requirements.txt`): open a terminal in JupyterLab (or use `!` in a cell), then restart the kernel:
++**This repository's extras** (`requirements.txt`): the Initialization section installs them; you can also run the command in a JupyterLab terminal, then restart the kernel:
+ 
+ ```bash
+ cd ~/work/opensource-lakehouse        # your clone
+@@ -255,7 +271,7 @@ lakehouse-install-requirements        # or: lakehouse-install-requirements path/
+ 
+ The packages go to `~/.local/lakehouse/python3.10`, which lasts only for the current server session (only `~/work` is kept across restarts): **rerun the command after every server start**. Running the command for another repository adds its packages too. When the platform's lock changes, the command asks you to rerun it with `--reset`, which empties that folder first.
+ 
+-**TPC-H in a notebook**: open `notebooks/workload/generate_tpch.py`, run the cells up to the widgets, type an entity (for example `orders`), and run the remaining cells.
++**TPC-H in a notebook**: open `notebooks/workload/generate_tpch.py`, run the Initialization section and the cells up to the widgets, type an entity (for example `orders`), and run the remaining cells.
+ 
+ `workflows/` and `dags/` play no part in Jupyter. An entry point that works in Jupyter with `dev` should behave the same in Airflow with `uat` and `prod`, apart from data and permissions.
+ 
+diff --git a/notebooks/workload/count_sample_rows.py b/notebooks/workload/count_sample_rows.py
+index a11e97a..ff50355 100644
+--- a/notebooks/workload/count_sample_rows.py
++++ b/notebooks/workload/count_sample_rows.py
+@@ -2,14 +2,30 @@
+ # # Count rows in the sample Iceberg table
+ #
+ # This Jupytext `py:percent` notebook checks the smoke table created by
+-# `init_environment.py`. It is read-only and logs the selected environment,
++# `test_environment.py`. It is read-only and logs the selected environment,
+ # table, and row count.
+ 
++# %% [markdown]
++# ## Initialization
++#
++# Jupyter only: in `spark-submit` (Airflow) these two cells are comments.
++# 1. Install this repository's extra packages (`requirements.txt`). After the
++#    first install in a server session, restart the kernel, then run all cells.
++# 2. Find this clone, load its config and start Spark: `dev` by default; for
++#    another environment, run `%env LAKEHOUSE_ENVIRONMENT=uat` (or `prod`) first.
++#    It defines `spark` and `config`.
++
++# %%
++# !lakehouse-install-requirements ~/work/opensource-lakehouse
++
++# %%
++# %run ../common/jupyter_environment_resolver.py
++
+ # %% [markdown]
+ # ## Start Spark and load the environment configuration
+ #
+-# In Jupyter, the environment resolver selects `dev` (or `LAKEHOUSE_ENVIRONMENT`)
+-# and exposes `spark` and `config`. In Airflow, `spark-submit` starts the session using the
++# In Jupyter, the Initialization cells above select `dev` (or
++# `LAKEHOUSE_ENVIRONMENT`) and expose `spark` and `config`. In Airflow, `spark-submit` starts the session using the
+ # environment and config directory passed by the DAG.
+ 
+ # %%
+@@ -25,9 +41,6 @@ logging.basicConfig(
+ logger = logging.getLogger(__name__)
+ 
+ 
+-# %%
+-# %run ../common/jupyter_environment_resolver.py
+-
+ # %% [markdown]
+ # ## Count the table rows
+ #
+diff --git a/notebooks/workload/generate_tpch.py b/notebooks/workload/generate_tpch.py
+index cdf3367..957c265 100644
+--- a/notebooks/workload/generate_tpch.py
++++ b/notebooks/workload/generate_tpch.py
+@@ -8,11 +8,27 @@
+ #
+ # In Airflow, `workflows/generate_tpch.json` runs it once per entity with
+ # `--entity <name>` after `--`; `--scale-factor` is optional (default 0.01).
+-# In Jupyter, run `lakehouse-install-requirements` once per server start and
+-# restart the kernel; then run the widget cell below, fill in `entity` (and,
++# In Jupyter, run the Initialization cells (and restart the kernel after the
++# first install); then run the widget cell below, fill in `entity` (and,
+ # optionally, `scale_factor`), and run the remaining cells. DuckDB downloads its
+ # `tpch` extension the first time it is used, so the first run needs network access.
+ 
++# %% [markdown]
++# ## Initialization
++#
++# Jupyter only: in `spark-submit` (Airflow) these two cells are comments.
++# 1. Install this repository's extra packages (`requirements.txt`). After the
++#    first install in a server session, restart the kernel, then run all cells.
++# 2. Find this clone, load its config and start Spark: `dev` by default; for
++#    another environment, run `%env LAKEHOUSE_ENVIRONMENT=uat` (or `prod`) first.
++#    It defines `spark` and `config`.
++
++# %%
++# !lakehouse-install-requirements ~/work/opensource-lakehouse
++
++# %%
++# %run ../common/jupyter_environment_resolver.py
++
+ # %%
+ import logging
+ import sys
+diff --git a/notebooks/workload/test_environment.py b/notebooks/workload/test_environment.py
+index 91a5539..e3b7d82 100644
+--- a/notebooks/workload/test_environment.py
++++ b/notebooks/workload/test_environment.py
+@@ -6,10 +6,26 @@
+ # with `spark-submit`. The job creates a namespace if needed and overwrites
+ # only its dedicated synthetic smoke table.
+ 
++# %% [markdown]
++# ## Initialization
++#
++# Jupyter only: in `spark-submit` (Airflow) these two cells are comments.
++# 1. Install this repository's extra packages (`requirements.txt`). After the
++#    first install in a server session, restart the kernel, then run all cells.
++# 2. Find this clone, load its config and start Spark: `dev` by default; for
++#    another environment, run `%env LAKEHOUSE_ENVIRONMENT=uat` (or `prod`) first.
++#    It defines `spark` and `config`.
++
++# %%
++# !lakehouse-install-requirements ~/work/opensource-lakehouse
++
++# %%
++# %run ../common/jupyter_environment_resolver.py
++
+ # %% [markdown]
+ # ## Imports
+ #
+-# Jupyter start-up is delegated to `../common/jupyter_environment_resolver.py` below. In a regular
++# In Jupyter, the Initialization cells above start Spark. In a regular
+ # `spark-submit` run, the DAG supplies the repository root on `PYTHONPATH`.
+ 
+ # %%
+@@ -25,18 +41,6 @@ logging.basicConfig(
+ logger = logging.getLogger(__name__)
+ 
+ 
+-# %% [markdown]
+-# ## Select the environment and start Spark
+-#
+-# In a Jupyter kernel, the resolver uses `dev` unless `LAKEHOUSE_ENVIRONMENT` is
+-# set to `uat` or `prod` first, for example with `%env LAKEHOUSE_ENVIRONMENT=uat`
+-# (a new environment needs a kernel restart). The `%run` line is a Jupytext
+-# magic: it becomes active in Jupyter and remains a comment in this Python
+-# script, so spark-submit skips it.
+-
+-# %%
+-# %run ../common/jupyter_environment_resolver.py
+-
+ # %% [markdown]
+ # ## Workload settings and operations
+ #
+diff --git a/tests/workload_foundation/test_jupyter_scripts.py b/tests/workload_foundation/test_jupyter_scripts.py
+index 8e15d81..8ee8f1d 100644
+--- a/tests/workload_foundation/test_jupyter_scripts.py
++++ b/tests/workload_foundation/test_jupyter_scripts.py
+@@ -49,3 +49,15 @@ def test_entry_points_run_the_scripts_from_common():
+         assert "jupyter_helper" not in text
+         assert "# %run ./" not in text
+     assert not (REPOSITORY_ROOT / "notebooks/workload/jupyter_helper.py").exists()
++
++
++INITIALIZATION = ["# !lakehouse-install-requirements ~/work/opensource-lakehouse", "# %run ../common/jupyter_environment_resolver.py"]
++
++
++def test_every_notebook_starts_with_the_initialization_section():
++    """CR-4: the first code cells of each notebook install the extras and run the resolver."""
++    for path in sorted((REPOSITORY_ROOT / "notebooks/workload").glob("*.py")):
++        cells = [cell.strip() for cell in path.read_text().split("# %%")[1:]]
++        code = [cell for cell in cells if not cell.startswith("[markdown]")]
++        assert code[:2] == INITIALIZATION, path.name
++        assert cells[1].startswith("[markdown]\n# ## Initialization"), path.name
+-- 
+2.55.0
+
+
+From 42de0f3b9d439ec475b5083f98e1313b46406cfc Mon Sep 17 00:00:00 2001
+From: cdiogo1979 <cdiogo@gmail.com>
+Date: Tue, 10 Nov 2026 17:01:47 +0000
+Subject: [PATCH 3/3] Give every notebook the same sections
+
+Each notebook in notebooks/workload/ now reads: title, Initialization,
+Imports, the job's own sections, and Execution (only the __main__
+block). The README and AGENTS.md describe the structure, and a test
+checks it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ AGENTS.md                                     |  1 +
+ README.md                                     |  8 ++++++
+ notebooks/workload/count_sample_rows.py       | 13 ++++++----
+ notebooks/workload/generate_tpch.py           | 15 ++++++++++-
+ notebooks/workload/test_environment.py        | 15 ++++++-----
+ .../test_jupyter_scripts.py                   | 26 +++++++++++++++++++
+ 6 files changed, 65 insertions(+), 13 deletions(-)
+
+diff --git a/AGENTS.md b/AGENTS.md
+index 5dd957c..ca3cbc6 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -17,6 +17,7 @@ This is a lakehouse **data product repository**. [README.md](README.md) is the c
+ - **Entry points**:
+   - use `notebooks.common.job_runtime.start_spark_job(app_name)` for the config and the Spark session, and declare task arguments for `notebooks.common.cli.parse_task_args(...)` (workflow `args` after `--` in Airflow, widgets or `TASK_ARGS` in Jupyter; values are strings, never templated; check them in the job);
+   - never configure Spark catalogs, tokens or redaction here: the platform's `lakehouse_spark` does that;
++  - structure every notebook in `notebooks/workload/` as: title, `## Initialization`, `## Imports`, the job's own sections, `## Execution` (only the `__main__` block); a test checks it;
+   - start every notebook in `notebooks/workload/` with the Initialization section (after the title cell): `# !lakehouse-install-requirements ~/work/opensource-lakehouse` and `# %run ../common/jupyter_environment_resolver.py`; use `jupyter_input_widget_helper.py` after `WIDGET_LIST` for task arguments;
+   - keep run code under `if __name__ == "__main__":` and stop Spark in `finally:`.
+ - **Configs**:
+diff --git a/README.md b/README.md
+index 56b75b9..9081680 100644
+--- a/README.md
++++ b/README.md
+@@ -185,6 +185,14 @@ arguments = parse_task_args(TASK_ARGUMENTS)     # {"date": "2026-11-10", "mode":
+ 
+   `cli.task_args()` still returns the raw list (after `--`, or `TASK_ARGS` in Jupyter). Arguments are passed as a list and never go through a shell.
+ - **Environment variables** set in the Airflow container: `LAKEHOUSE_ENVIRONMENT` (`prod` or `uat`), `LAKEHOUSE_PRODUCT` (for example `default`), and `PYTHONPATH=/opt/lakehouse-bundle`, so `notebooks.common` imports work.
++- **The same structure in every notebook**, as `## ` markdown sections:
++  1. the title (`# `) and what the job does;
++  2. **Initialization**: the two Jupyter cells below;
++  3. **Imports**: imports and logging;
++  4. the job's own sections (for example **Task arguments**, **TPC-H rules**, **Generate and count**): settings and functions, no top-level work;
++  5. **Execution**: only the `if __name__ == "__main__":` block that runs the job.
++
++  CI checks this order.
+ - **Start every notebook with the Initialization section** (see [Working in Jupyter](#working-in-jupyter)): `# !lakehouse-install-requirements ~/work/opensource-lakehouse` and `# %run ../common/jupyter_environment_resolver.py`, right after the title cell. CI checks that every file in `notebooks/workload/` has it.
+ - **Stop Spark at the end**: call `spark.stop()` in a `finally:` block. Put the run code under `if __name__ == "__main__":` so tests and notebooks can import the file without starting Spark.
+ - **Packages**: entry points run on the platform's Python 3.10 environment plus this repository's `requirements.txt`; see [Python packages](#python-packages).
+diff --git a/notebooks/workload/count_sample_rows.py b/notebooks/workload/count_sample_rows.py
+index ff50355..9f2d5cc 100644
+--- a/notebooks/workload/count_sample_rows.py
++++ b/notebooks/workload/count_sample_rows.py
+@@ -22,11 +22,10 @@
+ # %run ../common/jupyter_environment_resolver.py
+ 
+ # %% [markdown]
+-# ## Start Spark and load the environment configuration
++# ## Imports
+ #
+-# In Jupyter, the Initialization cells above select `dev` (or
+-# `LAKEHOUSE_ENVIRONMENT`) and expose `spark` and `config`. In Airflow, `spark-submit` starts the session using the
+-# environment and config directory passed by the DAG.
++# Standard and third-party imports, and logging. Under `spark-submit` the
++# repository root is on `PYTHONPATH`; in Jupyter the Initialization put it there.
+ 
+ # %%
+ import logging
+@@ -69,7 +68,11 @@ def count_sample_rows(spark: Any, config: Mapping[str, Any]) -> int:
+ 
+ 
+ # %% [markdown]
+-# ## Run the count and stop Spark
++# ## Execution
++#
++# In Airflow, `start_spark_job` loads the environment's config and starts Spark;
++# in Jupyter, the Initialization already defined `spark` and `config`. Spark is
++# stopped at the end, also after a failure.
+ 
+ # %%
+ if __name__ == "__main__":
+diff --git a/notebooks/workload/generate_tpch.py b/notebooks/workload/generate_tpch.py
+index 957c265..e68fdba 100644
+--- a/notebooks/workload/generate_tpch.py
++++ b/notebooks/workload/generate_tpch.py
+@@ -4,7 +4,8 @@
+ # This Jupytext `py:percent` notebook generates the TPC-H dataset in memory with
+ # DuckDB (the `duckdb` package from this repository's `requirements.txt`), counts
+ # the rows of one TPC-H entity, and checks the count against the TPC-H rules. It
+-# starts no Spark session and writes nothing.
++# needs no Spark session (the Initialization starts one in Jupyter, unused here)
++# and writes nothing.
+ #
+ # In Airflow, `workflows/generate_tpch.json` runs it once per entity with
+ # `--entity <name>` after `--`; `--scale-factor` is optional (default 0.01).
+@@ -29,6 +30,12 @@
+ # %%
+ # %run ../common/jupyter_environment_resolver.py
+ 
++# %% [markdown]
++# ## Imports
++#
++# Standard and third-party imports, and logging. Under `spark-submit` the
++# repository root is on `PYTHONPATH`; in Jupyter the Initialization put it there.
++
+ # %%
+ import logging
+ import sys
+@@ -171,6 +178,12 @@ def generate_tpch(entity: str, scale_factor: Decimal) -> int:
+     return count
+ 
+ 
++# %% [markdown]
++# ## Execution
++#
++# Reads the task arguments (the workflow's `args` in Airflow, the widgets in
++# Jupyter), checks them, then generates and counts.
++
+ # %%
+ if __name__ == "__main__":
+     # Importing this workload from pytest must not parse the caller's arguments.
+diff --git a/notebooks/workload/test_environment.py b/notebooks/workload/test_environment.py
+index e3b7d82..28d06ad 100644
+--- a/notebooks/workload/test_environment.py
++++ b/notebooks/workload/test_environment.py
+@@ -25,8 +25,8 @@
+ # %% [markdown]
+ # ## Imports
+ #
+-# In Jupyter, the Initialization cells above start Spark. In a regular
+-# `spark-submit` run, the DAG supplies the repository root on `PYTHONPATH`.
++# Standard and third-party imports, and logging. Under `spark-submit` the
++# repository root is on `PYTHONPATH`; in Jupyter the Initialization put it there.
+ 
+ # %%
+ import logging
+@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
+ 
+ 
+ # %% [markdown]
+-# ## Workload settings and operations
++# ## Sample table
+ #
+ # `storage_path` is expected to end in `/`, and `database_name` is a clean
+ # Spark identifier. The sample write is deterministic and scoped to the
+@@ -98,17 +98,18 @@ def test_environment(spark: Any, config: Mapping[str, Any]) -> None:
+ 
+ 
+ # %% [markdown]
+-# ## Create the namespace and smoke table, then stop Spark
++# ## Execution
+ #
+-# The table write creates the object-storage prefix. Only the dedicated
++# In Airflow, `start_spark_job` loads the environment's config and starts Spark;
++# in Jupyter, the Initialization already defined `spark` and `config`. The table
++# write creates the object-storage prefix; only the dedicated
+ # `sample_spark_job_output` table is overwritten. The `finally` block stops
+ # Spark even if catalog or storage initialization fails.
+ 
+ # %%
+ if __name__ == "__main__":
+     # Importing this workload from pytest or another module must not start
+-    # Spark or parse the caller's command-line arguments. In Jupyter, the
+-    # preceding %run magic supplies `spark` and `config` in this namespace.
++    # Spark or parse the caller's command-line arguments.
+     if "ipykernel" not in sys.modules:
+         from notebooks.common.job_runtime import start_spark_job
+ 
+diff --git a/tests/workload_foundation/test_jupyter_scripts.py b/tests/workload_foundation/test_jupyter_scripts.py
+index 8ee8f1d..50af654 100644
+--- a/tests/workload_foundation/test_jupyter_scripts.py
++++ b/tests/workload_foundation/test_jupyter_scripts.py
+@@ -61,3 +61,29 @@ def test_every_notebook_starts_with_the_initialization_section():
+         code = [cell for cell in cells if not cell.startswith("[markdown]")]
+         assert code[:2] == INITIALIZATION, path.name
+         assert cells[1].startswith("[markdown]\n# ## Initialization"), path.name
++
++
++def sections(text):
++    """(heading, code cells) for each "## " markdown section of a py:percent notebook."""
++    result = []
++    for cell in text.split("# %%")[1:]:
++        cell = cell.strip()
++        if cell.startswith("[markdown]"):
++            heading = next((line[5:] for line in cell.splitlines() if line.startswith("# ## ")), None)
++            if heading:
++                result.append((heading, []))
++        elif result:
++            result[-1][1].append(cell)
++    return result
++
++
++def test_every_notebook_has_initialization_imports_its_own_sections_and_execution():
++    """CR-5: the same frame in every notebook; the job's own sections sit between Imports and Execution."""
++    for path in sorted((REPOSITORY_ROOT / "notebooks/workload").glob("*.py")):
++        found = sections(path.read_text())
++        headings = [heading for heading, _ in found]
++        assert headings[:2] == ["Initialization", "Imports"] and headings[-1] == "Execution", (path.name, headings)
++        assert len(headings) > 3, f"{path.name}: no section of its own between Imports and Execution"
++        assert found[1][1][0].startswith(("import ", "from ")), path.name
++        execution = "\n".join(found[-1][1])
++        assert execution.startswith('if __name__ == "__main__":') and path.read_text().count('if __name__ == "__main__":') == 1, path.name
+-- 
+2.55.0
+

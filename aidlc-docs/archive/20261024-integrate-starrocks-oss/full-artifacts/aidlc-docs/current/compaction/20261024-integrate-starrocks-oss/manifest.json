@@ -1,0 +1,79 @@
+{
+  "intent_id": "20261024-integrate-starrocks-oss",
+  "name": "Integrate StarRocks OSS",
+  "objective": "Add StarRocks OSS as an analytical SQL engine over the existing Hive Metastore, Iceberg, and RustFS platform, with Kerberos service access, controlled SQL identities, and documented local operations.",
+  "date": "2026-10-25",
+  "scope": "Add opt-in StarRocks FE/BE runtime, Kerberos and RustFS service identity provisioning, an Iceberg HMS catalog and SQL access bootstrap, and operational guidance. Preserve Hive, PostgreSQL, RustFS, Spark, JupyterHub, existing data, credentials, and named volumes. Airflow/Jenkins integration remains out of scope.",
+  "workstreams": [
+    "Unit 1 — Identity Provisioning",
+    "Unit 2 — StarRocks Runtime",
+    "Unit 3 — SQL Bootstrap and Catalog Access",
+    "Build and Test — closed with accepted limitations",
+    "Deploy Handoff — approved"
+  ],
+  "verification": {
+    "status": "waived",
+    "user_accepted": true,
+    "details": "The user approved closing Build and Test with limitations on 2026-10-25. Documented checks passed for the runtime/catalog, SQL access matrix, reversible writer DML, Spark interoperability, state persistence after FE/BE recreation, read-only TPC-H Q1, the 2 CPU/2 GiB per-node reference profile, paired-state safety fixtures, and isolated ticket-refresh helper diagnostics. Live FE/BE ticket refresh behavior with a valid TGT through expiry, Docker Desktop storage quota/growth, and resource settings below 2 CPU/2 GiB per FE/BE remain unverified. This waiver records limitations and does not claim those checks passed. The deployment handoff was approved; no production deployment was performed."
+  },
+  "artifact_inventory_complete": true,
+  "summary": {
+    "major_requirements": [
+      "Integrate StarRocks OSS with the existing Hive Metastore Iceberg catalog and RustFS object store.",
+      "Provision a dedicated Kerberos service principal and RustFS identity for StarRocks.",
+      "Provide SQL identities with documented least-privilege access, including a writer identity for controlled Iceberg DML.",
+      "Preserve existing platform services, identities, credentials, data, and workspaces."
+    ],
+    "design_decisions": [
+      "Keep Hive Metastore as catalog, RustFS as object storage, and Spark as the ETL engine; add StarRocks as an opt-in analytical SQL engine.",
+      "Use a dedicated StarRocks Kerberos service identity for HMS access and a separate RustFS identity for object access.",
+      "Use StarRocks native SQL users and grants for the documented databaseA/databaseB access matrix.",
+      "Keep StarRocks FE/BE state in paired persistent named volumes and run a fail-closed paired-state preflight before startup.",
+      "Keep SQL bootstrap host-side behind a non-secret diagnostics canary; do not expose secret-bearing SQL in command output."
+    ],
+    "implementation_decisions": [
+      "Added opt-in StarRocks FE/BE Compose services and local images, startup health checks, loopback FE ports, and persistent volumes.",
+      "Added identity provisioning for StarRocks Kerberos and RustFS access while preserving existing credential values.",
+      "Added a SQL bootstrap flow for the iceberg catalog and native SQL users/grants.",
+      "Configured Hive Metastore S3 filesystem aliases required for table creation against RustFS.",
+      "Documented startup, access, tested reference resources, and verification limitations."
+    ],
+    "deviations": [
+      "Build and Test was closed under an explicit user-approved waiver; live ticket-refresh expiry behavior, Docker storage quota/growth, and lower FE/BE resource profiles remain unverified.",
+      "The tested 2 CPU/2 GiB per FE/BE settings apply only to the documented read-only TPC-H Q1 profile and are not a proven minimum.",
+      "The deployment handoff was approved, but no production deployment was performed."
+    ],
+    "superseded_decisions": [
+      "The previous active architecture described Hive/RustFS/Spark/Jupyter without StarRocks; this intent adds StarRocks as the analytical SQL service."
+    ]
+  },
+  "canonical_updates": [
+    {
+      "path": "aidlc-docs/knowledge/hive-dremio-rustfs/application-design.md",
+      "content": "# Current Application Design — Hive, StarRocks, RustFS, Kerberos, Spark, and JupyterHub\n\n## Purpose and scope\n\nThis repository is a local Docker Compose lakehouse proof of concept. Hive Metastore 3.1.3 is the Iceberg catalog, PostgreSQL stores metastore metadata, RustFS stores Iceberg objects, Spark runs ETL, StarRocks OSS provides an opt-in analytical SQL endpoint, and JupyterHub provides isolated Spark notebooks. Airflow and Jenkins orchestration are deferred. This is not a production deployment design.\n\n## Components and boundaries\n\n- **Hive Metastore 3.1.3** stores catalog metadata in PostgreSQL and describes Iceberg data in RustFS. S3 filesystem aliases are configured in the metastore Hadoop configuration.\n- **Kerberos KDC** provides service and workload principals/keytabs in the local `LAKEHOUSE.LOCAL` realm. StarRocks uses a dedicated service identity to authenticate to HMS; Spark and notebook identities remain separate.\n- **RustFS** stores Iceberg objects in the `lake` bucket. StarRocks uses a dedicated RustFS identity; Spark and notebook workloads use their configured identities.\n- **StarRocks FE/BE** is an opt-in analytical SQL engine. FE provides the MySQL protocol endpoint and coordinates queries; BE executes them. The `iceberg` external catalog reads Iceberg metadata through HMS and objects through RustFS. FE metadata and BE storage persist in separate paired named volumes.\n- **StarRocks SQL identities** are managed independently from Kerberos and RustFS identities. `user_a` has read access to databaseA and is denied databaseB; `user_b` can read both; `write_service_account` can read and perform DML on existing tables; `admin` has administrative access. These are StarRocks SQL grants and do not imply permissions in Hive, Kerberos, or RustFS.\n- **Spark and TPCH loader** create and populate `databaseA` and `databaseB` as `write-service-account`, using Hive as the catalog and RustFS as the warehouse.\n- **JupyterHub 5.3.0** starts isolated Spark single-user containers with per-user Kerberos and RustFS credentials. DummyAuthenticator usernames are development labels, not verified identities. The Hub binds to localhost.\n\n## Security and access boundaries\n\nKerberos principals, PostgreSQL roles, RustFS S3 identities, and StarRocks SQL users are separate credentials and authorization layers. StarRocks authenticates to HMS with its service principal and uses its own RustFS access identity for object access; native StarRocks grants enforce the tested SQL access matrix. Notebook sessions use their explicitly configured credentials. Do not infer end-user delegation to HMS or RustFS from a StarRocks SQL username.\n\nStarRocks startup uses a paired-state preflight and a secret-exposure canary before host-side SQL bootstrap. Credential files are protected under ignored `.runtime/credentials/`. The FE/BE ports are loopback-published for local development.\n\n## Operations and lifecycle\n\nUse the repository start/stop scripts and preserve named volumes and protected `.runtime/credentials` material during normal operation. Do not commit runtime secrets. StarRocks volumes are persistent; a failed paired-state preflight fails closed and requires deliberate operator investigation. See the active README for commands and the archived intent artifacts for detailed design and verification evidence.\n\n## Verification limits\n\nBuild and Test closed with a user-approved waiver. Live FE/BE ticket-refresh behavior through TGT expiry, Docker Desktop storage quota/growth, and resource profiles below 2 CPU/2 GiB per FE/BE remain unverified. The 2 CPU/2 GiB profile passed one read-only scale-factor-1 TPC-H Q1 query; it is not a general sizing guarantee. The handoff is for a local PoC, not production security, availability, backup, or recovery.\n"
+    },
+    {
+      "path": "aidlc-docs/knowledge/hive-dremio-rustfs/functional-design/lakehouse-workload-and-access.md",
+      "content": "# Functional Design — Lakehouse Workload and Access\n\n## Catalog and sample workload\n\nHive Metastore is the catalog for Iceberg tables stored in the RustFS `lake` warehouse. Spark uses `write-service-account` to create and populate `databaseA` and `databaseB`. StarRocks exposes the existing Iceberg tables through its `iceberg` external catalog. Airflow/Jenkins orchestration is deferred.\n\n## Identity and authorization layers\n\n- StarRocks native SQL identities are distinct from Kerberos principals, RustFS identities, and JupyterHub usernames.\n- The tested SQL policy is: `user_a` reads databaseA and is denied databaseB; `user_b` reads both; `write_service_account` reads and performs DML on existing tables; `admin` has full StarRocks administration.\n- StarRocks uses its dedicated Kerberos service identity to access HMS and a separate RustFS service identity to read/write Iceberg objects. Do not assume that these service credentials provide per-query end-user delegation to HMS or RustFS.\n- Spark ETL authenticates as the writer Kerberos principal and uses writer RustFS credentials. Notebook Spark sessions use their configured per-user credentials. DummyAuthenticator usernames are development labels, not verified identities.\n- Kerberos, Hive authorization, StarRocks SQL grants, and RustFS policies are separate controls. A grant in one layer does not automatically grant access in another.\n\n## Workload behavior\n\nThe optional TPCH workload generates scale-factor-1 input, validates required files, and uses Spark to create or validate the tables in both databases. Existing tables are retained when their schema and row counts match; conflicts stop the run rather than overwrite data. The loader emits a redacted manifest without credentials. StarRocks reads the Iceberg tables through the HMS catalog and RustFS storage integration.\n\n## Data preservation and failure behavior\n\nDo not reset Hive metadata, RustFS objects, KDC state, StarRocks named volumes, credentials, or Jupyter workspaces during routine operation. A failed FE/BE paired-state preflight fails closed. A failed ETL remains reported as failed; existing table conflicts do not trigger replacement or cleanup.\n\n## Local development limits\n\nThe stack is a local proof of concept. The tested StarRocks resource profile covers one read-only scale-factor-1 TPC-H Q1 query at 2 CPU/2 GiB per FE/BE, not a general workload minimum. Live ticket-refresh behavior through TGT expiry, Docker storage growth, concurrent ETL, and production availability/recovery are not verified. No production identity provider or workflow orchestrator is included.\n"
+    }
+  ],
+  "artifacts": [
+    "aidlc-docs/current/inception",
+    "aidlc-docs/current/construction",
+    "aidlc-docs/current/deploy",
+    "aidlc-docs/current/compaction/20261024-integrate-starrocks-oss/manifest.json",
+    "aidlc-docs/knowledge/hive-dremio-rustfs",
+    "docker-compose.yml",
+    ".env.example",
+    ".gitignore",
+    "README.md",
+    "infra",
+    "scripts"
+  ],
+  "cleanup_paths": [
+    "aidlc-docs/current/inception",
+    "aidlc-docs/current/construction",
+    "aidlc-docs/current/deploy",
+    "aidlc-docs/current/compaction/20261024-integrate-starrocks-oss"
+  ]
+}

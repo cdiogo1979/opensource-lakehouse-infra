@@ -1,0 +1,150 @@
+{
+  "realm": "lakehouse",
+  "groups": [
+    "role-default-developer",
+    "role-default-analyst",
+    "role-default-owner",
+    "role-default-writer",
+    "role-platform-admin"
+  ],
+  "clients": {
+    "polaris": "role-claim namespace; no interactive or service-account flow",
+    "jupyterhub": {
+      "type": "confidential OIDC Authorization Code client",
+      "pkce": "S256",
+      "redirect_uri": "http://jupyterhub.localhost:8000/hub/oauth_callback",
+      "group_claim": "groups",
+      "group_values": [
+        "role-default-developer",
+        "role-default-analyst",
+        "role-platform-admin"
+      ],
+      "admin_group": "role-platform-admin"
+    },
+    "airflow": {
+      "type": "confidential OIDC Authorization Code client",
+      "redirect_uris": [
+        "http://localhost:8085/auth/oauth-authorized/keycloak",
+        "http://127.0.0.1:8085/auth/oauth-authorized/keycloak"
+      ],
+      "group_claim": "groups",
+      "group_values": [
+        "role-default-developer",
+        "role-default-analyst",
+        "role-default-owner",
+        "role-default-writer",
+        "role-platform-admin"
+      ]
+    },
+    "rustfs": {
+      "type": "confidential OIDC Authorization Code client",
+      "pkce": "S256",
+      "redirect_uris": [
+        "http://localhost:9001/rustfs/admin/v3/oidc/callback/default",
+        "http://127.0.0.1:9001/rustfs/admin/v3/oidc/callback/default"
+      ],
+      "post_logout_redirect_uris": [
+        "http://localhost:9001/rustfs/console/auth/login",
+        "http://127.0.0.1:9001/rustfs/console/auth/login"
+      ],
+      "console_port_variable": "RUSTFS_CONSOLE_HOST_PORT",
+      "group_claim": "groups",
+      "group_claim_in_id_token": true,
+      "group_values": [
+        "role-default-developer",
+        "role-default-analyst",
+        "role-default-owner",
+        "role-default-writer",
+        "role-platform-admin"
+      ]
+    },
+    "jenkins": {
+      "type": "confidential OIDC Authorization Code client",
+      "pkce": "S256",
+      "redirect_uris": [
+        "http://localhost:8090/securityRealm/finishLogin",
+        "http://127.0.0.1:8090/securityRealm/finishLogin"
+      ],
+      "post_logout_redirect_uris": [
+        "http://localhost:8090/",
+        "http://127.0.0.1:8090/"
+      ],
+      "port_variable": "JENKINS_HOST_PORT",
+      "group_claim": "groups",
+      "group_claim_in_id_token": true,
+      "authorized_groups": {
+        "role-default-owner": "Overall/Administer",
+        "role-default-developer": "Overall/Read, Job/Read, Job/Build, Job/Cancel, Job/Workspace",
+        "role-default-analyst": "Overall/Read, Job/Read",
+        "role-platform-admin": "Overall/Administer"
+      }
+    },
+    "lakehouse-cli": "public Authorization Code + PKCE (S256); redirect URI supplied at invocation",
+    "lakehouse-writer": {
+      "type": "confidential password-grant client for the srv-default-writer workload identity",
+      "direct_access_grants": true,
+      "service_account": false,
+      "access_token_lifespan_seconds": 3600,
+      "user": "srv-default-writer"
+    },
+    "srv-starrocks": {
+      "type": "confidential client-credentials service account used by the StarRocks Iceberg catalogs to call Polaris",
+      "service_account": true,
+      "direct_access_grants": false,
+      "service_account_group": "every product's writer group (role-default-writer for default)",
+      "polaris_principal": "service-account-srv-starrocks",
+      "secret_file": ".runtime/credentials/srv-starrocks-client-secret"
+    }
+  },
+  "token_contract": {
+    "principal_name": "preferred_username",
+    "role_claim": "resource_access.polaris.roles",
+    "role_values": [
+      "role-default-developer",
+      "role-default-analyst",
+      "role-default-owner",
+      "role-default-writer"
+    ],
+    "human_access_token_lifetime_seconds": 300,
+    "writer_access_token_lifetime_seconds": 3600
+  },
+  "platform_admin_group": {
+    "group": "role-platform-admin",
+    "polaris_product_role": "role-<product>-owner for every product (role-default-owner for default)",
+    "equivalent_to": "role-default-owner",
+    "keycloak_client_roles": {
+      "realm-management": [
+        "realm-admin"
+      ]
+    },
+    "keycloak_admin_console": "http://keycloak.localhost:8080/admin/lakehouse/console/"
+  },
+  "bootstrap_users": {
+    "joe-developer": "role-default-developer",
+    "peter-analyst": "role-default-analyst",
+    "maria-owner": "role-default-owner",
+    "srv-default-writer": "role-default-writer",
+    "platform-admin": "role-platform-admin"
+  },
+  "data_products": {
+    "source": "data-products/<name>.yaml (default.yaml is the first product)",
+    "group_pattern": "^role-[a-z][a-z0-9]{1,19}-(owner|developer|analyst|writer)$",
+    "per_product": {
+      "groups": "role-<token>-{owner,developer,analyst,writer}, each carrying the Polaris client role of the same name",
+      "platform_admin": "role-platform-admin carries every product's owner client role",
+      "srv_starrocks": "service-account-srv-starrocks is a member of every writer group",
+      "writer_user": "srv-<name>-writer by default, created once with the default password"
+    },
+    "managed_by": "infra/keycloak/keycloak_products.py (bootstrap-realm.py and product-identity.py)"
+  },
+  "ldap_federation": {
+    "provider": "lakehouse-ldap (writable LDAP user storage, vendor other)",
+    "connection": "ldaps://ldap:636, bind cn=keycloak,ou=services,dc=lakehouse,dc=local (password .runtime/credentials/ldap-keycloak-password), CA via truststore-paths",
+    "users": "ou=people,dc=lakehouse,dc=local; uid = username, entryUUID = id; inetOrgPerson",
+    "mappers": "Keycloak defaults: uid, cn = first name, sn = last name, mail",
+    "groups": "kept in Keycloak (no LDAP group mapper)",
+    "passwords": "set through the LDAP password-modify operation; stored {ARGON2}",
+    "local_users": "client service accounts (service-account-*) and the master realm",
+    "managed_by": "infra/keycloak/ldap_federation.py (bootstrap-realm.py, before any user is created)"
+  }
+}

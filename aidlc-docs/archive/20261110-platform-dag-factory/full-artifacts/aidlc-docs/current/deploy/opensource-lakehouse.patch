@@ -1,0 +1,2268 @@
+From 9cbd6f8f4ec3f4c0e8ebe75ba2f937565629e9cb Mon Sep 17 00:00:00 2001
+From: cdiogo1979 <cdiogo@gmail.com>
+Date: Tue, 10 Nov 2026 10:39:13 +0000
+Subject: [PATCH] Declare DAGs in workflows/*.json; the platform builds them
+
+The lakehouse platform's lakehouse_dags factory now builds this repository's
+Airflow DAGs from workflows/*.json. The repository keeps its code (notebooks/),
+its settings (configs/), and a fixed two-line stub in dags/.
+
+- Add workflows/test_environment.json (same DAG and task IDs as before) and the
+  dags/lakehouse.py stub.
+- Remove dags/dag_factory.py, dag_defaults.py, spark_output.py, .airflowignore,
+  and test_environment.py, now owned by the platform.
+- notebooks/common/cli.py: workflow task arguments after "--" (task_args).
+- Remove the dev-bundle client and its examples; the platform has no dev bundle.
+- Jenkinsfile: validate workflows with lakehouse-validate-workflows.
+- README.md is the complete guide; AIRFLOW_BUNDLES.md removed; AGENTS.md updated.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ AGENTS.md                                     |  80 +--
+ AIRFLOW_BUNDLES.md                            |  70 ---
+ Jenkinsfile                                   |  13 +-
+ README.md                                     | 300 +++++++---
+ airflow_bundle_client.example.yml             |  14 -
+ airflow_bundle_client.py                      | 283 ---------
+ airflow_bundle_config.example.json            |  47 --
+ dags/.airflowignore                           |   2 -
+ dags/dag_defaults.py                          | 116 ----
+ dags/dag_factory.py                           | 548 ------------------
+ dags/lakehouse.py                             |   4 +
+ dags/spark_output.py                          |  16 -
+ dags/test_environment.py                      |  28 -
+ notebooks/common/cli.py                       |  38 +-
+ scripts/code_quality.sh                       |   4 +-
+ .../test_airflow_bundle_client.py             | 236 --------
+ .../test_airflow_writer_token_contract.py     |  13 -
+ tests/workload_foundation/conftest.py         |   1 -
+ tests/workload_foundation/test_cli.py         |  45 ++
+ .../test_init_environment.py                  |  55 --
+ .../test_product_bundles.py                   |  45 +-
+ workflows/test_environment.json               |  26 +
+ 22 files changed, 370 insertions(+), 1614 deletions(-)
+ delete mode 100644 AIRFLOW_BUNDLES.md
+ delete mode 100644 airflow_bundle_client.example.yml
+ delete mode 100644 airflow_bundle_client.py
+ delete mode 100644 airflow_bundle_config.example.json
+ delete mode 100644 dags/.airflowignore
+ delete mode 100644 dags/dag_defaults.py
+ delete mode 100644 dags/dag_factory.py
+ create mode 100644 dags/lakehouse.py
+ delete mode 100644 dags/spark_output.py
+ delete mode 100644 dags/test_environment.py
+ delete mode 100644 tests/jenkins_deployment/test_airflow_bundle_client.py
+ delete mode 100644 tests/jenkins_deployment/test_airflow_writer_token_contract.py
+ create mode 100644 tests/workload_foundation/test_cli.py
+ create mode 100644 workflows/test_environment.json
+
+diff --git a/AGENTS.md b/AGENTS.md
+index 8e7ea98..bba2c58 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -1,58 +1,26 @@
+ # Project guide for agents
+ 
+-## Purpose and layout
+-
+-This repository contains environment-configured Python Spark workloads and Airflow DAGs. Airflow runs workloads in a reusable Spark Docker container for each DAG run. A shared Airflow 3 deployment reads versioned Git DAG Bundles; Jenkins validates and gates repository changes but does not publish artifacts.
+-
+-- `configs/`: One non-secret YAML file per environment: `dev.yml`, `uat.yml`, and `prod.yml`. Each defines `storage_path` and `database_name`.
+-- `notebooks/common/`: Shared config loader, standard workload CLI parser, and Spark job bootstrap for Jupyter and `spark-submit`.
+-- `notebooks/workload/`: Exported Python Spark jobs and Jupytext-compatible Jupyter helper scripts. Keep environment values in YAML.
+-- `dags/`: Thin DAG declarations, `dag_factory.py` for standard validation and Docker Spark tasks, and `dag_defaults.py` for shared DAG settings and bundle-name environment selection.
+-- `airflow_bundle_config.example.json`: Secret-free example `dag_bundle_config_list` with a dev branch placeholder plus fixed UAT and production refs.
+-- `airflow_bundle_client.py`: Operator CLI that changes only `lakehouse-dev.tracking_ref` in the deployment-managed bundle config. Its apply command is deployment-specific and supplied externally.
+-- `airflow_bundle_client.example.yml`: Example non-secret client settings. Never add credentials.
+-- `AIRFLOW_BUNDLES.md`: Airflow bundle and dev branch-selection setup and usage.
+-- `tests/`: pytest and Hypothesis coverage for workload configuration and deployment-client behavior.
+-- `Jenkinsfile`: Repository CI checks only. It does not push files to Airflow or change bundle refs.
+-- `aidlc-docs/current/`: Active AI-DLC intent artifacts, state, and audit log. Follow `.agents/skills/aidlc-workflows/SKILL.md` for workflow work.
+-
+-## Git DAG Bundle contract
+-
+-- Configure one Airflow 3 deployment with three unique Git bundles: `lakehouse-dev`, `lakehouse-uat`, and `lakehouse-prod`.
+-- The dev bundle tracks an operator-selected feature branch. UAT tracks `uat`; production tracks `main`.
+-- Each bundle checks out the same `dags/`, `configs/`, and `notebooks/` directories from its selected Git ref, preserving repository root as the bundle root.
+-- The dev bundle follows a selected feature branch; UAT follows `uat`; production follows `main`. Each bundle checks out the same `dags/`, `configs/`, and `notebooks/` paths from its selected branch, so code and config are versioned together.
+-- Keep Git bundle versioning enabled. Each run must use its recorded bundle commit for the DAG, config, helpers, and Spark application.
+-- Store Git credentials in an Airflow Git connection or approved secrets backend. Never embed credentials in the repository URL, bundle config, example settings, DAGs, or logs.
+-- Airflow's native UI does not edit `tracking_ref`. Use the operator CLI and the deployment-provided apply/reload command. Confirm Airflow has fetched and parsed the selected branch before testing; client apply success alone does not prove readiness.
+-- Restrict branch selection to trusted operators because feature branch code runs in the Airflow/Spark environment. UAT and production refs must remain unchanged by the client.
+-- Verify the Docker daemon can bind-mount the run-pinned bundle checkout into the configured Spark job image. Do not use mutable `/opt/jobs` paths or injected release markers.
+-
+-## Workload conventions
+-
+-- Keep the three environment YAML files directly under `configs/`; do not make environment folders.
+-- `notebooks/common/config_loader.py` accepts only `dev`, `uat`, and `prod`, validates required `storage_path` and `database_name`, preserves arbitrary nested YAML values, and never falls back across environments.
+-- Export Spark code as `.py` files under `notebooks/workload/`. It must be runnable by `spark-submit` without notebook-only state.
+-- Git DAG Bundles select code by ref; the stable bundle name selects the DAG ID prefix and runtime environment. `lakehouse-main` (and `lakehouse-prod`) produces a `main-` DAG ID and uses the `prod` config, `lakehouse-uat` produces `uat-` and uses `uat`, and other bundle names produce `dev-` and use `dev`. The factory detects the bundle name from Airflow's `tracking_repo` parse path or versioned checkout path. Keep bundle names stable when changing the tracked branch. The shared factory builds a manual DAG (`schedule=None`), validates matching config, mounts the bundle once in a reusable Spark container, and runs each workload with `spark-submit`. For this deployment, the Spark image mounts the `write-service-account` keytab and provides `SPARK_WRITER_PRINCIPAL` and `SPARK_WRITER_KEYTAB`; `notebooks/common/job_runtime.py` logs Hadoop UGI in from that keytab before workload catalog operations. Configure image, Spark master, Docker socket, and Docker network through the Airflow deployment environment.
+-- Spark DAG declarations should call `dags/dag_factory.py` and supply `dag_name`, workload mappings with `task_name`, `entrypoint_file`, optional `runs_after`, and the schedule. Entrypoint files may repeat under distinct task names. Workloads without predecessors run in parallel after container creation; `runs_after` establishes task dependencies. The factory validates the config, starts one reusable Spark container with the bundle mounted once, and always removes the container after all workloads finish or fail. It derives the environment, DAG ID prefix, config, Docker/Spark settings, tags, and bundle-version behavior from the bundle checkout and shared settings. This uses Spark `local[*]` inside one container; it is not a distributed master/worker cluster.
+-- UAT and production share Airflow and Spark infrastructure but select their own YAML targets. Do not put credentials, tokens, or endpoints in source/YAML.
+-- `notebooks/workload/init_environment.py` creates the configured catalog namespace with `CREATE NAMESPACE IF NOT EXISTS`, then overwrites only `sample_spark_job_output` beneath `storage_path`. Object storage creates the prefix during the table write; the workload does not call Hadoop's S3A filesystem API to create a root directory. The path ends in `/`; the workload appends the clean table name directly.
+-- Use simple Spark identifier names for `database_name`; special-character quoting is outside the workload contract.
+-
+-## Dev branch-selection client
+-
+-Example commands:
+-
+-```bash
+-python3 airflow_bundle_client.py --settings /etc/airflow/lakehouse/client.yml show
+-python3 airflow_bundle_client.py --settings /etc/airflow/lakehouse/client.yml select --branch feature/my-change
+-```
+-
+-The client validates Git branch syntax, a required configured feature-ref prefix, and protected refs; changes only the dev bundle ref; writes the bundle config atomically; and invokes the configured argv-style apply command without a shell. It restores the previous config and invokes apply again if the requested update fails. The platform command must safely update Airflow's `dag_bundle_config_list` and reload/restart the required components. Airflow fetch/parse readiness is checked separately.
+-
+-## Python conventions
+-
+-- Add Google-style docstrings to generated functions/methods with applicable args, returns, and exceptions.
+-- Keep config validation in the shared loader; use `notebooks/common/cli.py` for standard `--environment` and `--config-dir` arguments.
+-- Keep test dependencies in `requirements-dev.txt`. Airflow, Spark, and provider versions belong to the external runtime; do not invent or pin them here.
+-- Update this guide whenever repository structure or workload/deployment contracts change.
++This is a lakehouse **data product repository**. [README.md](README.md) is the complete guide: how runs work, the workflow JSON reference, the entry-point and config contracts, Jupyter, CI, and limits. Read it before changing anything. This file lists only the rules agents must follow.
++
++## What belongs here
++- `workflows/<name>.json`: Airflow DAG declarations (workflow JSON v1, see the README). This is the only way to declare DAGs.
++- `notebooks/workload/*.py`: Spark entry points in Jupytext `py:percent` format, runnable by `spark-submit` and as notebooks.
++- `notebooks/common/`: shared helpers (`config_loader.py`, `cli.py`, `job_runtime.py`), used by Airflow runs and Jupyter.
++- `configs/<env>.yml` and optional `configs/<product>/<env>.yml`: non-secret settings for `prod`, `uat`, `dev`.
++- `dags/lakehouse.py`: the platform stub. **Never edit it, and never add files to `dags/`.**
++- `tests/`, `scripts/code_quality.sh`, `Jenkinsfile`, `requirements-dev.txt`.
++
++## Rules
++- **No DAG code**: don't write Airflow DAG code, operators, or a DAG factory here. The lakehouse platform's `lakehouse_dags` package builds the DAGs from `workflows/*.json`. DAG IDs are `<bundle>-<name>` and must not be set or changed in this repository.
++- **Valid workflows**: keep every workflow file valid. One invalid file blocks all of the bundle's DAGs in Airflow. CI runs `lakehouse-validate-workflows .`. Unknown fields are refused, `name` must equal the file name, and `entrypoint` must exist in `notebooks/workload/`.
++- **Entry points**:
++  - use `notebooks.common.job_runtime.start_spark_job(app_name)` for the config and the Spark session, and `notebooks.common.cli.task_args()` for workflow `args` (passed after `--`, never templated);
++  - keep run code under `if __name__ == "__main__":` and stop Spark in `finally:`.
++- **Configs**:
++  - the loader accepts only `dev`, `uat` and `prod`, requires `storage_path` and `database_name`, and never falls back across environments;
++  - values must be the product's own namespaces and buckets;
++  - no credentials, tokens, or endpoints anywhere in the repository.
++- **Dependencies**: Airflow, Spark and provider versions belong to the platform; don't pin or install them here. Entry points can use only what the platform's Spark image provides. Test tools go in `requirements-dev.txt`.
++- **Python style**: Google-style docstrings on new functions, Black and Ruff with line length 200, Flake8 and Bandit clean (`scripts/code_quality.sh all`).
++- **Keep the docs current**: update `README.md`, and this file if a rule changes, whenever the layout or a contract changes.
++- **AI-DLC work**: follow `.agents/skills/aidlc-workflows/SKILL.md`; artifacts live in `aidlc-docs/`.
+diff --git a/AIRFLOW_BUNDLES.md b/AIRFLOW_BUNDLES.md
+deleted file mode 100644
+index 8c9ca2c..0000000
+--- a/AIRFLOW_BUNDLES.md
++++ /dev/null
+@@ -1,70 +0,0 @@
+-# Airflow Git DAG Bundles
+-
+-## Bundle layout
+-
+-`airflow_bundle_config.example.json` demonstrates three `GitDagBundle` entries for one Airflow 3 deployment:
+-
+-| Bundle | Tracking ref | DAG directory |
+-|---|---|---|
+-| `lakehouse-dev` | Selected feature branch | `dags/` |
+-| `lakehouse-uat` | `uat` | `dags/` |
+-| `lakehouse-prod` | `main` | `dags/` |
+-
+-Each bundle also includes `configs/` and `notebooks/` so a DAG run can use the artifacts from the same recorded commit. The repository root is the bundle root (`subdir` is omitted). Update the example repository URL and Airflow Git connection ID for the deployment. Store Git credentials in the Airflow connection or secrets backend; never place credentials in the bundle JSON.
+-
+-All bundles check out the same repository paths (`dags/`, `configs/`, and `notebooks/`) at their configured refs. The Git ref selects the code version; the stable Airflow bundle name selects the DAG ID prefix and workload config: `lakehouse-main`/`lakehouse-prod` creates a `main-` DAG ID and uses `prod.yml`, `lakehouse-uat` creates `uat-` and uses `uat.yml`, and all other bundle names create `dev-` and use `dev.yml`. This keeps feature branches on the dev environment when the dev bundle client changes its tracking ref. The shared DAG factory derives the bundle name from the Git bundle checkout path. Airflow may parse from `<bundle-storage>/<bundle-name>/tracking_repo/...` and use `<bundle-storage>/<bundle-name>/versions/<commit>/...` for pinned versions. These path conventions are implementation details and should be rechecked when upgrading or changing bundle storage configuration. Config and workload files remain branch-versioned and all environment YAML files may coexist in the repository.
+-
+-Install compatible `apache-airflow-providers-git` and `apache-airflow-providers-docker` releases in the DAG processor and task execution components. Configure the JSON list as `[dag_processor] dag_bundle_config_list` (for example through `AIRFLOW__DAG_PROCESSOR__DAG_BUNDLE_CONFIG_LIST`). Keep bundle versioning enabled and configure a suitable refresh interval. Disable or leave the default local DAG bundle empty so it does not discover duplicate DAG files.
+-
+-The `refresh_interval` in the example is illustrative. A branch commit appears after Airflow fetches it and successfully parses the DAG. Each run is associated with a bundle commit; preserve that version when rerunning unless you intentionally select the latest version.
+-
+-## Configure the branch-selection client
+-
+-The client changes the development bundle's `tracking_ref`; it does not push or merge branches. Copy `airflow_bundle_client.example.yml` to a deployment-owned location and set:
+-
+-- `bundle_config_path`: writable JSON `dag_bundle_config_list` source file used by the deployment apply operation.
+-- `dev_bundle_name`: keep `lakehouse-dev`.
+-- `allowed_branch_prefixes`: required list of feature branch prefixes, such as `feature/`; selected refs must match one.
+-- `apply_command`: an argv list for a trusted deployment command. It must apply the updated JSON to Airflow and perform the deployment-specific reload/restart needed for the new `tracking_ref` to take effect. Include `{config_path}` as the argument that receives the updated JSON file. Do not use a shell command string or store secrets in this file.
+-
+-Airflow's built-in UI does not provide a `tracking_ref` selector. The deployment command is platform-specific because Airflow may receive this setting through environment variables, an Airflow config file, Helm, Docker Compose, or another deployment manager. Configure the client on an operator-controlled host with access to the bundle config and deployment command. Limit access to trusted operators; selected DAG code executes with Airflow's privileges.
+-
+-## Select and verify a feature branch
+-
+-```bash
+-python3 airflow_bundle_client.py --settings /path/to/client.yml show
+-python3 airflow_bundle_client.py --settings /path/to/client.yml select --branch feature/my-change
+-```
+-
+-The client rejects invalid Git refs, protected refs (`dev`, `uat`, `main`), and refs outside the configured feature prefixes. It modifies only `lakehouse-dev`, writes the config atomically, runs the configured apply command without a shell, and restores the previous config if apply fails. A successful client command means the deployment apply command succeeded; it does not mean Airflow has fetched or parsed the branch.
+-
+-After switching, confirm in Airflow that the dev DAG is available from the intended branch and inspect the DAG/run bundle version before triggering it. The selected feature branch must contain `dags/`, the environment config, and the Spark workload/helpers under `notebooks/`; it should preserve the dev environment ID. UAT and production continue tracking their fixed refs and retain their own environment IDs in their branch versions.
+-
+-## Spark application path requirement
+-
+-The sample DAG derives the repository root from its location inside the bundle version. It validates the environment config, creates one reusable Spark Docker container with the bundle mounted read-only, submits named workloads with `/opt/spark/bin/spark-submit`, then removes the container in a cleanup task that runs after success or failure. Declare each workload with `task_name` and `entrypoint_file`; the same entrypoint can appear under different task names. Optional `runs_after` names one or more predecessor tasks. A workload without `runs_after` runs in parallel with other root workloads after container creation. For example:
+-
+-```python
+-dag = create_spark_dag(
+-    dag_name="init_environment",
+-    workloads=(
+-        {
+-            "task_name": "initialize_environment_first",
+-            "entrypoint_file": "init_environment.py",
+-        },
+-        {
+-            "task_name": "initialize_environment_second",
+-            "entrypoint_file": "init_environment.py",
+-            "runs_after": ("initialize_environment_first",),
+-        },
+-        {
+-            "task_name": "count_sample_rows",
+-            "entrypoint_file": "count_sample_rows.py",
+-            "runs_after": ("initialize_environment_first",),
+-        },
+-    ),
+-    schedule=None,
+-)
+-```
+-
+-Each submission starts a separate Spark application in `local[*]` mode inside the shared container. This is a single-container setup, not a distributed Spark master/worker cluster. The image must include a compatible Spark runtime and PyYAML. The run container uses the deployment's Spark entrypoint in `driver` mode, mounts the Hive catalog `spark-defaults.conf` and Kerberos configuration, and receives the writer keytab and RustFS credentials as read-only file mounts. The `spark-submit` command carries the writer principal and keytab path, and `notebooks/common/job_runtime.py` explicitly logs Hadoop UGI in from that keytab before workload catalog calls; the entrypoint also maintains the local ticket cache for the container runtime. Configure `LAKEHOUSE_SPARK_IMAGE`, `LAKEHOUSE_SPARK_MASTER` (defaults to `local[*]`), `LAKEHOUSE_DOCKER_URL`, and `LAKEHOUSE_SPARK_DOCKER_NETWORK` in Airflow. Configure both `LAKEHOUSE_BUNDLE_CONTAINER_ROOT` (the bundle root visible inside Airflow) and `LAKEHOUSE_BUNDLE_HOST_ROOT` (the same root visible to the Docker daemon). The factory translates the run-pinned bundle path between these roots while preserving its bundle name and commit directory. The Docker daemon must be able to access that host path. Verify this mapping and selected bundle-commit version before using the setup for shared environments.
+diff --git a/Jenkinsfile b/Jenkinsfile
+index 42fbaa9..998cd31 100644
+--- a/Jenkinsfile
++++ b/Jenkinsfile
+@@ -13,7 +13,18 @@ pipeline {
+ 
+         stage('Validate') {
+             steps {
+-                sh '.venv/bin/python -m compileall -q airflow_bundle_client.py dags notebooks'
++                sh '.venv/bin/python -m compileall -q dags notebooks'
++            }
++        }
++
++        stage('Validate workflows') {
++            steps {
++                // The lakehouse platform's rules for workflows/*.json and the dags/ stub,
++                // provided by the platform Jenkins (the same checks Airflow applies).
++                sh '''
++                    command -v lakehouse-validate-workflows >/dev/null || { echo "lakehouse-validate-workflows is not installed on this Jenkins" >&2; exit 1; }
++                    lakehouse-validate-workflows .
++                '''
+             }
+         }
+ 
+diff --git a/README.md b/README.md
+index ec3f00e..7edd343 100644
+--- a/README.md
++++ b/README.md
+@@ -1,114 +1,250 @@
+ # Open Source Lakehouse Workloads
+ 
+-This repository contains environment-configured PySpark workloads and Airflow DAGs for a lakehouse using Apache Iceberg, a Nessie-compatible catalog, and S3-compatible object storage. Airflow reads versioned code from Git DAG Bundles and runs Spark jobs in Docker containers. Jenkins checks changes; it does not deploy or copy workload files into Airflow.
+-
+-## Architecture
+-
+-```mermaid
+-flowchart LR
+-    Repo[Git repository\nDAGs, configs, workloads] -->|Git DAG Bundles\nversioned refs| Airflow[Airflow 3\nDAG processor, scheduler, task execution]
+-    Jenkins[Jenkins CI] -->|compile and unit tests| Repo
+-    Operator[Operator] -->|select dev tracking ref| Client[Bundle client]
+-    Client -->|deployment apply command| Airflow
+-    Airflow -->|Docker API via accessible daemon| Spark[Spark job container\nreused during one DAG run]
+-    Repo -. pinned bundle checkout mounted read-only .-> Spark
+-    Spark -->|Iceberg catalog operations| Nessie[Nessie-compatible catalog]
+-    Spark -->|S3A reads and writes| Storage[S3-compatible object storage\nfor example RustFS]
+-    Jupyter[Optional Jupyter environment] -->|interactive development| Spark
+-```
++This repository is a **data product repository**. It holds a product's Spark code, its environment settings, and the declarations of its Airflow workflows. It doesn't hold any DAG-building logic, infrastructure, or credentials: the lakehouse platform turns the workflow declarations into Airflow DAGs, runs them in Spark containers, and gives each run its product's write credentials.
++
++The same code runs in two places:
++- **Airflow**: scheduled or manual runs of the production (`main`) and UAT (`uat`) branches.
++- **Jupyter**: interactive development with the `dev` settings.
++
++**Contents**
++1. [What lives where](#what-lives-where)
++2. [How a run works](#how-a-run-works)
++3. [Repository layout](#repository-layout)
++4. [Workflow JSON reference](#workflow-json-reference)
++5. [The DAG stub](#the-dag-stub)
++6. [Writing an entry point](#writing-an-entry-point)
++7. [Configs and environments](#configs-and-environments)
++8. [Working in Jupyter](#working-in-jupyter)
++9. [CI in Jenkins](#ci-in-jenkins)
++10. [How-to](#how-to)
++11. [Limits](#limits)
++
++## What lives where
++
++| This repository | The lakehouse platform |
++|---|---|
++| `workflows/*.json`: which DAGs exist, their tasks, order, schedule, arguments, retries and timeouts | Turning each workflow into an Airflow DAG (the `lakehouse_dags` factory) |
++| `notebooks/workload/*.py`: the Spark jobs, also usable as notebooks | Starting one Spark container per DAG run, with this repository mounted read-only |
++| `notebooks/common/`: config loading, argument parsing, Spark session start-up | Issuing the product's short-lived write token to each run, through the token broker |
++| `configs/`: non-secret settings per environment (storage path, catalog, database) | The Git bundles that Airflow reads from this repository (`<product>-main`, `<product>-uat`) |
++| `dags/lakehouse.py`: a fixed two-line stub | The Jenkins jobs that check this repository, and the workflow validator they use |
+ 
+-For each DAG run, Airflow validates the selected environment config, starts a Spark container, and mounts the same pinned bundle revision into it. Each workload is submitted as a separate `spark-submit` application. The DAG's `runs_after` declarations define ordering and parallel branches. A cleanup task removes the container after the workload tasks finish, including when a task fails.
++Nothing in this repository holds a password, key, or token, and nothing should.
+ 
+-The Spark setup currently uses `local[*]` inside one container. It does not provision a distributed Spark master and worker cluster. Jupyter is optional for interactive development; production execution is driven by Airflow.
++## How a run works
+ 
+-## Infrastructure required
++1. **Bundles**: the platform's data product file names this repository in its `repo` block. Airflow then keeps two Git bundles of it:
++   - `<product>-main` tracks the production branch (`main` for `default`) and runs in environment `prod`;
++   - `<product>-uat` tracks the UAT branch (`uat`) and runs in environment `uat`.
+ 
+-| Component | Requirement |
+-|---|---|
+-| Git hosting | Repository reachable by Airflow's Git DAG Bundle provider. The DAGs, config, and workload files must live in the same selected ref. |
+-| Airflow | Airflow 3 deployment with compatible Git DAG Bundle support and configured bundle refresh/versioning. DAG processor, scheduler, and task execution components need the required provider/runtime dependencies. |
+-| Bundle configuration | Three stable bundle names: `lakehouse-dev` tracks an operator-selected feature ref, `lakehouse-uat` tracks `uat`, and `lakehouse-prod` tracks `main`. Git authentication belongs in an Airflow connection or secrets backend. |
+-| Docker access | The Airflow task execution environment needs the Docker SDK and access to a Docker daemon. The daemon must be able to see and mount the exact bundle checkout path passed by the task runner. Configure its endpoint and any shared Docker network. |
+-| Spark job image | A Docker image with a compatible Spark/PySpark runtime, Iceberg and Nessie catalog integrations, S3A support, PyYAML, and the dependencies needed by the workloads. The image must be available to the Docker daemon. |
+-| Catalog | A reachable Nessie-compatible catalog configured in the Spark runtime, with the namespaces and Iceberg tables addressed by the workload configs. |
+-| Object storage | Reachable S3-compatible storage with a bucket/path matching `storage_path`, S3A support, and permissions for the Spark job identity. Configure the region and credentials through the runtime or an approved secret mechanism. |
+-| CI | Jenkins or an equivalent CI runner with Python and the repository development dependencies to run compilation and unit tests. CI is not a deployment mechanism. |
+-| Optional notebook environment | Jupyter with the Spark dependencies and network access to the same catalog and storage for interactive workload development. The included helper selects `dev` by default. |
++   Each bundle checks out `dags/`, `workflows/`, `notebooks/` and `configs/`, and refreshes about every 5 minutes.
++2. **DAGs**: Airflow parses `dags/lakehouse.py`, which asks the platform to build one DAG per `workflows/<name>.json`. The DAG ID is `<bundle>-<name>`, for example `default-uat-test_environment`. The platform's token broker relies on that prefix to pick the product's writer, so DAG IDs are never chosen in this repository.
++3. **Each DAG has the same fixed shape**:
+ 
+-The sample DAG reads these Airflow environment settings:
++   ```text
++   create_cluster ─▶ validate_environment ─▶ submit_<task> … (in runs_after order) ─▶ stop_cluster ─▶ verify_workloads_succeeded
++   ```
+ 
+-- `LAKEHOUSE_SPARK_IMAGE` (default: `airflow-spark-job:3.5.5_1.8.1`)
+-- `LAKEHOUSE_SPARK_MASTER` (default: `local[*]`)
+-- `LAKEHOUSE_DOCKER_URL` (default: `unix://var/run/docker.sock`)
+-- `LAKEHOUSE_SPARK_DOCKER_NETWORK` (optional Docker network)
+-- `AWS_REGION` (default: `us-east-1`)
++   - `create_cluster` registers the run with the token broker and starts one Spark container. The container mounts the run's exact bundle commit at `/opt/lakehouse-bundle`, read-only.
++   - `validate_environment` loads the environment's config inside that container with this repository's own `notebooks/common/config_loader.py`.
++   - Each `submit_<task>` runs one entry point with `spark-submit --master local[*]` as its own Spark application. Tasks without `runs_after` start together; the others wait for their predecessors.
++   - `stop_cluster` always runs, even after failures. It removes the container and revokes the run's token.
++   - `verify_workloads_succeeded` succeeds only if every task succeeded.
++4. **Credentials**: the container gets only a short-lived token for the product's writer user and a way to renew it during the run. Spark reads and writes Iceberg tables through the Polaris catalog, and the storage credentials come from Polaris. Everything a run does is within the product's own namespaces and buckets.
++5. **Versions**: code, configs and workflows always come from the same commit, the one recorded for that run.
+ 
+-Catalog endpoints, storage credentials, Git credentials, and deployment-specific bundle reload settings must be supplied by the platform. Do not commit secrets. The YAML files in `configs/` are examples and must point to the intended environment targets before running jobs; in particular, the UAT file calls out that its values are placeholders.
++## Repository layout
+ 
+-## Environment and bundle selection
++```text
++workflows/                 One JSON file per Airflow DAG (see the reference below)
++  test_environment.json
++dags/
++  lakehouse.py             The platform stub: the only file allowed in dags/
++notebooks/
++  common/                  Shared helpers for Airflow runs and Jupyter:
++    config_loader.py         load and validate configs/<env>.yml (and configs/<product>/<env>.yml)
++    cli.py                   --environment, --config-dir, and task arguments after --
++    job_runtime.py           start_spark_job(): config plus a catalog-ready Spark session
++  workload/                Spark jobs (Jupytext py:percent files, also notebooks)
++    test_environment.py      creates the smoke table
++    count_sample_rows.py     counts its rows
++    jupyter_helper.py        Jupyter start-up (dev settings)
++configs/                   Non-secret settings: dev.yml, uat.yml, prod.yml, optional <product>/<env>.yml
++tests/                     pytest and Hypothesis tests for the helpers and workloads
++scripts/code_quality.sh    lint, flake8, bandit (used by CI)
++Jenkinsfile                CI checks (no deployment)
++requirements-dev.txt       Test and lint tools
++AGENTS.md                  Rules for coding agents working here
++```
+ 
+-The repository keeps one non-secret YAML file per environment:
++## Workflow JSON reference
++
++One file per DAG: `workflows/<name>.json`. A complete example:
++
++```json
++{
++  "apiVersion": "lakehouse.local/workflow/v1",
++  "name": "daily_sales",
++  "description": "Load yesterday's sales, then refresh the summary.",
++  "schedule": "0 3 * * *",
++  "tags": ["sales"],
++  "tasks": [
++    {
++      "name": "load_sales",
++      "entrypoint": "load_sales.py",
++      "args": ["--source", "sales_raw", "--days", "1"],
++      "retries": 2,
++      "retry_delay_seconds": 300,
++      "execution_timeout_seconds": 3600
++    },
++    {"name": "refresh_summary", "entrypoint": "refresh_summary.py", "runs_after": ["load_sales"]}
++  ]
++}
++```
+ 
+-- `configs/dev.yml`
+-- `configs/uat.yml`
+-- `configs/prod.yml`
++**Workflow fields**
+ 
+-Each contains `storage_path` and `database_name`. The shared loader validates these required keys and makes additional YAML settings available to workloads. It rejects unsupported environment names instead of silently falling back to another config.
++| Field | Required | Type and limits | Meaning |
++|---|---|---|---|
++| `apiVersion` | yes | exactly `lakehouse.local/workflow/v1` | The contract version |
++| `name` | yes | 1–100 of `a-z A-Z 0-9 _ . -`, not starting with `.`; must equal the file name | DAG name; the DAG ID is `<bundle>-<name>` |
++| `schedule` | yes | `null`, or a cron expression or preset (`@daily`), at most 100 characters | `null` means manual runs only |
++| `description` | no | printable text, at most 500 characters | Shown in Airflow; a default names the tasks |
++| `tags` | no | at most 10 distinct tags of `a-z A-Z 0-9 _ . : -` (1–50 characters) | Extra Airflow tags; the bundle name and `spark` are always added, and `spark` may not be listed |
++| `tasks` | yes | 1–50 tasks | See below |
+ 
+-The Git ref determines which version of DAGs, configs, and Spark code Airflow loads. The stable bundle name determines the runtime environment and DAG ID prefix:
++**Task fields**
+ 
+-| Bundle name | Config | DAG ID prefix | Intended ref |
++| Field | Required | Type and limits | Meaning |
+ |---|---|---|---|
+-| `lakehouse-dev` | `dev.yml` | `dev-` | Operator-selected feature branch |
+-| `lakehouse-uat` | `uat.yml` | `uat-` | `uat` |
+-| `lakehouse-prod` or `lakehouse-main` | `prod.yml` | `main-` | `main` |
+-| `<product>-uat` (data product bundle) | `<product>/uat.yml`, else `uat.yml` | `<product>-uat-` | the product's `uat_branch` |
+-| `<product>-main` (data product bundle) | `<product>/prod.yml`, else `prod.yml` | `<product>-main-` | the product's `prod_branch` |
++| `name` | yes | as workflow `name`; unique in the workflow | Task ID `submit_<name>` |
++| `entrypoint` | yes | a `.py` file name that exists in `notebooks/workload/` (no folders) | The job to run; one file may serve several tasks |
++| `runs_after` | no | list of other task names in this workflow, default `[]` | Wait for these tasks; no task may wait for itself, and the order may not loop |
++| `args` | no | list of at most 50 strings (each 1–500 printable characters), default `[]` | Passed to the entry point after `--` (see [entry points](#writing-an-entry-point)) |
++| `retries` | no | integer 0–10 | Airflow retries for this task |
++| `retry_delay_seconds` | no | integer 0–3600; only with `retries` ≥ 1 | Wait between retries |
++| `execution_timeout_seconds` | no | integer 1–86400 | Fail the task if it runs longer |
+ 
+-The lakehouse platform creates one `<product>-main` and one `<product>-uat` bundle for every data product whose definition names this repository. Their DAG IDs start with the bundle name (for example `default-main-test_environment`); the platform's token broker derives the product's writer from that prefix and checks with Airflow that the DAG really comes from that bundle, so keep the prefix the factory builds. A product can keep its own settings in `configs/<product>/<env>.yml`; without one it uses the shared file.
++- **Strict checking**: any unknown field, wrong type, or out-of-range value is an error. For example, `true` isn't accepted as a number, and `"command"` isn't a field.
++- **One bad file stops the whole bundle**: if any file in `workflows/` is invalid, Airflow shows a single import error for `dags/lakehouse.py` that lists every problem by file and field. None of that bundle's DAGs load until it's fixed, so CI checks the files before they're merged.
++- **No templates**: `args` are passed exactly as written. Airflow templates such as `{{ ds }}` aren't rendered, because a template could read Airflow's connections and variables. A scheduled job that needs a date should work it out itself, for example yesterday in UTC.
+ 
+-Changing the dev tracking ref lets an operator test a feature branch while retaining the dev config and DAG identity. Each DAG run uses its recorded bundle commit so its DAG, config, helpers, and workload code stay aligned. See [AIRFLOW_BUNDLES.md](AIRFLOW_BUNDLES.md) for setup, branch selection, and operational checks.
++## The DAG stub
+ 
+-## Solution design principles
++`dags/lakehouse.py` must contain exactly this:
+ 
+-- **Keep environment settings out of workload code.** Environment YAML holds non-secret paths, database names, and other workload settings. Credentials and tokens come from the platform's connections or secrets backend.
+-- **Version code and configuration together.** DAG Bundles provide a pinned repository revision for every run, avoiding mismatches between DAG definitions and Spark entrypoints.
+-- **Keep DAG declarations small and reusable.** A declaration supplies a DAG name, schedule, and workload/task mappings. The shared DAG factory handles environment selection, config validation, Spark container lifecycle, submissions, dependencies, and cleanup.
+-- **Make dependencies explicit.** Workloads without `runs_after` start independently after container creation. Named predecessors describe the DAG graph and permit parallel execution where dependencies allow it.
+-- **Reuse runtime setup within a DAG run.** One Spark container receives the read-only bundle mount; multiple entrypoints run as separate Spark applications inside it.
+-- **Keep workloads portable.** Spark jobs are Python files in Jupytext `py:percent` format. They support `spark-submit` and can be opened as notebooks; Jupyter-specific initialization is isolated in a helper.
+-- **Limit side effects.** The environment initializer creates the configured namespace if missing and writes only the dedicated sample Iceberg table. Iceberg/Nessie garbage collection remains a platform operation because deleting files without reference-aware GC can affect other branches or historical snapshots.
+-- **Separate CI from release control.** Jenkins compiles code and runs tests. Airflow's bundle configuration and the operator client control which branch Airflow reads; no file-copy publisher is used.
+-- **Treat branch switching as privileged.** Feature-branch code runs with Airflow/Spark capabilities, so only trusted operators should change the dev bundle ref.
++```python
++# Airflow DAGs for this repository, built by the lakehouse platform from workflows/*.json.
++from lakehouse_dags import load_workflows
+ 
+-## Repository layout
++load_workflows(globals(), __file__)
++```
++
++- **Never edit the stub, and don't add other files to `dags/`**. CI refuses both. Declare DAGs in `workflows/` instead.
++- **The comment matters**: Airflow only parses files that mention both "airflow" and "DAG".
++- **No workflows**: a repository without `workflows/` simply has no DAGs.
++
++## Writing an entry point
++
++An entry point is a Python file in `notebooks/workload/`. In Airflow it's started as:
+ 
+ ```text
+-configs/                    Per-environment YAML settings
+-dags/                       Thin DAG declarations and shared DAG factory
+-notebooks/common/            Config loading, CLI parsing, Spark bootstrap
+-notebooks/workload/          Jupytext-compatible Spark workload scripts
+-tests/                       Unit and property tests
+-airflow_bundle_client.py     Operator CLI for selecting the dev Git ref
+-airflow_bundle_config.example.json
+-                            Secret-free Airflow Git bundle example
+-Jenkinsfile                 Compile and test CI pipeline
+-AIRFLOW_BUNDLES.md           Bundle setup and operations guide
++spark-submit --master local[*] /opt/lakehouse-bundle/notebooks/workload/<entrypoint> \
++    --environment <prod|uat> --config-dir /opt/lakehouse-bundle/configs [-- <args…>]
++```
++
++Use the shared helpers rather than parsing `sys.argv` yourself:
++
++```python
++from notebooks.common.cli import task_args
++from notebooks.common.job_runtime import start_spark_job
++
++spark, config = start_spark_job("load_sales")  # reads --environment and --config-dir; dev in Jupyter
++extra = task_args()                             # the workflow task's "args"; [] in Jupyter
+ ```
+ 
+-## Local development and checks
++- **`start_spark_job(app_name)`**:
++  - parses `--environment` and `--config-dir`, or in Jupyter uses `LAKEHOUSE_ENVIRONMENT` (default `dev`);
++  - loads the config, preferring the product folder (see below);
++  - returns `(spark, config)` with the Iceberg catalogs and token handling configured.
++- **Arguments**: `cli.parse_args()` returns the same values plus `task_args`, and `cli.task_args()` returns only the arguments after the first `--`, unchanged. Arguments are passed as a list and never go through a shell.
++- **Environment variables** set in the Airflow container: `LAKEHOUSE_ENVIRONMENT` (`prod` or `uat`), `LAKEHOUSE_PRODUCT` (for example `default`), and `PYTHONPATH=/opt/lakehouse-bundle`, so `notebooks.common` imports work.
++- **Stop Spark at the end**: call `spark.stop()` in a `finally:` block. Put the run code under `if __name__ == "__main__":` so tests and notebooks can import the file without starting Spark.
++- **Packages**: entry points run on the platform's Spark runtime image (Spark 3.5.5, Iceberg 1.10.2, Python 3.10, with PyYAML, pandas, numpy and pyarrow), and nothing else is installed. A shared requirements file for Airflow and Jupyter is planned by the platform.
+ 
+-Install the development dependencies and run the repository checks:
++## Configs and environments
++
++| Environment | Used by | File |
++|---|---|---|
++| `prod` | Airflow, bundle `<product>-main` | `configs/<product>/prod.yml`, else `configs/prod.yml` |
++| `uat` | Airflow, bundle `<product>-uat` | `configs/<product>/uat.yml`, else `configs/uat.yml` |
++| `dev` | Jupyter only | `configs/<product>/dev.yml`, else `configs/dev.yml` |
++
++- **Required keys**: `storage_path` (for example `s3a://bucket-default/`, ending with `/`) and `database_name`, the product's namespace for that environment, for example `default_lh`, `default_lhuat` or `default_lhdev`.
++  - **Usually present**: `catalog_name` (`lakehouse`, `lakehouse_uat` or `lakehouse_dev`).
++  - **Other keys**: any other keys, including nested ones, are passed through to the job as read-only values.
++- **Strict loading**: the loader refuses unknown environment names and never falls back from one environment to another. A missing file fails `validate_environment` before any task runs.
++- **One repository, several products**: put each product's settings in `configs/<product>/`. The `configs/<env>.yml` files are the fallback.
++- **The values must match the platform**: they have to be the product's namespaces and buckets from the platform's data product file. Access to anything else is refused by Polaris.
++- **No secrets**: never put credentials, tokens or endpoints in configs.
++
++## Working in Jupyter
++
++1. Sign in to JupyterHub (<http://jupyterhub.localhost:8000>) with your platform account. You need to be a developer or analyst of the product.
++2. Clone this repository into your workspace and open a file from `notebooks/workload/` as a notebook. Jupytext reads the `py:percent` format.
++3. Run the cells. `# %run ./jupyter_helper.py` finds the repository root, selects `dev`, and starts Spark with **your own** identity, so you see and write only what your groups allow (for a developer, read in `prod` and `uat`, write in `dev`).
++
++`workflows/` and `dags/` play no part in Jupyter. An entry point that works in Jupyter with `dev` should behave the same in Airflow with `uat` and `prod`, apart from data and permissions.
++
++## CI in Jenkins
++
++The platform creates a folder named after the product in Jenkins (<http://127.0.0.1:8090>), with two multibranch jobs running this `Jenkinsfile`:
++
++| Job | Builds | Checks for changes |
++|---|---|---|
++| `<product>_ci` | `main` and `uat` | every 5 minutes |
++| `<product>_cd` | every branch of this repository with an open pull request (not forks) | every 30 minutes |
++
++The pipeline stages are:
++1. install the test dependencies;
++2. compile `dags` and `notebooks`;
++3. **validate workflows** (`lakehouse-validate-workflows .`): the platform's own rules for `workflows/*.json`, the exact stub, and nothing else in `dags/`;
++4. Ruff and Black, Flake8, and Bandit, in parallel;
++5. pytest.
++
++CI doesn't deploy anything: Airflow picks up merged changes from Git by itself.
++
++## How-to
++
++**Add a workflow**
++1. Write the job in `notebooks/workload/<job>.py` (see [entry points](#writing-an-entry-point)) and try it in Jupyter with `dev`.
++2. Add `workflows/<name>.json` with `apiVersion`, `name`, `schedule` and `tasks`.
++3. Open a pull request into `uat`. `<product>_cd` validates and tests the branch.
++4. Merge. Within about 5 minutes Airflow shows `<product>-uat-<name>`; run it there.
++5. Open a pull request from `uat` into `main`. After the merge, `<product>-main-<name>` appears.
++
++**Add a task with arguments and retries**: add an entry to `tasks` with `args`, `retries` and, optionally, `retry_delay_seconds`. Read the arguments with `task_args()`.
++
++**Run a dependency**: list the earlier task's name in `runs_after`. Tasks with no dependencies start in parallel after the config check.
++
++**Check locally before pushing**:
+ 
+ ```bash
+-python3 -m pip install -r requirements-dev.txt
+-python3 -m compileall -q airflow_bundle_client.py dags notebooks
+-python3 -m pytest -q
++python3 -m venv .venv && .venv/bin/python -m pip install -r requirements-dev.txt
++.venv/bin/python -m compileall -q dags notebooks
++PATH=".venv/bin:$PATH" scripts/code_quality.sh all
++.venv/bin/python -m pytest -q
+ ```
+ 
+-The Spark workloads require access to a compatible Spark runtime, catalog, and object store to run end to end. Unit tests do not replace deployment validation of Airflow DAG parsing, bundle checkout mounts, Spark dependencies, catalog connectivity, or storage permissions.
++The workflow validator runs in Jenkins. With a copy of the platform's `lakehouse_dags` package, you can also run it yourself: `PYTHONPATH=<platform>/infra/airflow python3 -m lakehouse_dags.validate .`
++
++**Remove a workflow**: delete its JSON file. After the next bundle refresh the DAG disappears from Airflow, and its run history stays in Airflow's records.
+ 
+-## Further documentation
++## Limits
+ 
+-- [Airflow Git DAG Bundles](AIRFLOW_BUNDLES.md)
+-- [AI-DLC design records](aidlc-docs/knowledge/opensource-lakehouse/application-design.md)
++- **No Python DAGs**: DAGs are declared only in JSON, and CI refuses Python files in `dags/` other than the stub. Until the platform enforces this in Airflow too, such files would still be parsed there, so keep `dags/` clean.
++- **One container per run**: Spark runs in `local[*]` mode inside one container per DAG run, not on a distributed cluster.
++- **Fixed environments**: Airflow runs only `prod` (from the production branch) and `uat` (from the UAT branch). `dev` is for Jupyter, and feature branches are tested in CI, not in Airflow.
++- **Public repository only**: the platform reads it anonymously.
++- **Scans, not webhooks**: Jenkins checks for changes every 5 or 30 minutes, and Airflow refreshes bundles about every 5 minutes. Pull requests from forks aren't built.
++- **Fixed packages**: entry points can use only the packages in the platform's Spark image.
+diff --git a/airflow_bundle_client.example.yml b/airflow_bundle_client.example.yml
+deleted file mode 100644
+index cfb80f4..0000000
+--- a/airflow_bundle_client.example.yml
++++ /dev/null
+@@ -1,14 +0,0 @@
+-# Deployment-owned client settings. Do not add credentials here.
+-bundle_config_path: /etc/airflow/lakehouse/dag_bundle_config_list.json
+-dev_bundle_name: lakehouse-dev
+-
+-# The client only accepts feature refs using one of these branch prefixes.
+-allowed_branch_prefixes:
+-  - "feature/"
+-
+-# Platform command that applies this config and reloads/restarts the required
+-# Airflow components. Arguments are passed directly without a shell.
+-apply_command:
+-  - /usr/local/bin/apply-airflow-bundle-config
+-  - --config
+-  - "{config_path}"
+diff --git a/airflow_bundle_client.py b/airflow_bundle_client.py
+deleted file mode 100644
+index 8e67a9d..0000000
+--- a/airflow_bundle_client.py
++++ /dev/null
+@@ -1,283 +0,0 @@
+-"""Safely select the feature branch used by Airflow's development bundle."""
+-
+-from __future__ import annotations
+-
+-import argparse
+-import json
+-import os
+-import subprocess  # nosec B404 - calls below use argument lists with shell=False.
+-import sys
+-import tempfile
+-from pathlib import Path
+-from typing import Any, Sequence
+-
+-import yaml
+-
+-PROTECTED_REFS = frozenset({"dev", "uat", "main"})
+-DEV_BUNDLE_NAME = "lakehouse-dev"
+-APPLY_CONFIG_PLACEHOLDER = "{config_path}"
+-
+-
+-class BundleClientError(Exception):
+-    """Raised when bundle configuration cannot be safely updated."""
+-
+-
+-def load_client_settings(settings_path: Path) -> dict[str, Any]:
+-    """Load and validate the non-secret branch-client settings.
+-
+-    Args:
+-        settings_path: YAML file containing the deployment-owned config path,
+-            bundle name, optional branch-prefix policy, and apply command.
+-
+-    Returns:
+-        Validated settings with an absolute bundle config path.
+-
+-    Raises:
+-        BundleClientError: If the settings file is missing or invalid.
+-    """
+-    try:
+-        settings = yaml.safe_load(settings_path.read_text(encoding="utf-8"))
+-    except (OSError, UnicodeDecodeError, yaml.YAMLError) as error:
+-        raise BundleClientError(f"Cannot read client settings: {error}") from error
+-
+-    if not isinstance(settings, dict):
+-        raise BundleClientError("Client settings must be a YAML mapping")
+-
+-    config_value = settings.get("bundle_config_path")
+-    if not isinstance(config_value, str) or not config_value.strip():
+-        raise BundleClientError("bundle_config_path must be a non-empty string")
+-    config_path = Path(config_value).expanduser()
+-    if not config_path.is_absolute():
+-        config_path = (settings_path.parent / config_path).resolve()
+-    settings["bundle_config_path"] = config_path
+-
+-    if settings.get("dev_bundle_name", DEV_BUNDLE_NAME) != DEV_BUNDLE_NAME:
+-        raise BundleClientError(f"dev_bundle_name must be {DEV_BUNDLE_NAME!r}")
+-    settings["dev_bundle_name"] = DEV_BUNDLE_NAME
+-
+-    prefixes = settings.get("allowed_branch_prefixes", [])
+-    if not isinstance(prefixes, list) or not prefixes or any(not isinstance(prefix, str) or not prefix for prefix in prefixes):
+-        raise BundleClientError("allowed_branch_prefixes must contain at least one non-empty feature-branch prefix")
+-    settings["allowed_branch_prefixes"] = prefixes
+-
+-    apply_timeout = settings.get("apply_timeout_seconds", 300)
+-    if not isinstance(apply_timeout, int) or apply_timeout < 1:
+-        raise BundleClientError("apply_timeout_seconds must be a positive integer")
+-    settings["apply_timeout_seconds"] = apply_timeout
+-
+-    apply_command = settings.get("apply_command")
+-    if not isinstance(apply_command, list) or not apply_command or any(not isinstance(part, str) or not part for part in apply_command):
+-        raise BundleClientError("apply_command must be a non-empty list of command arguments")
+-    if not any(APPLY_CONFIG_PLACEHOLDER in part for part in apply_command):
+-        raise BundleClientError(f"apply_command must include {APPLY_CONFIG_PLACEHOLDER}")
+-    settings["apply_command"] = apply_command
+-    return settings
+-
+-
+-def _load_bundle_config(config_path: Path) -> tuple[list[dict[str, Any]], bytes]:
+-    """Read a Git bundle config list and return it with its original bytes."""
+-    try:
+-        original_bytes = config_path.read_bytes()
+-        bundles = json.loads(original_bytes)
+-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+-        raise BundleClientError(f"Cannot read bundle config: {error}") from error
+-
+-    if not isinstance(bundles, list):
+-        raise BundleClientError("Bundle config must be a JSON list")
+-    names: list[str] = []
+-    for bundle in bundles:
+-        if not isinstance(bundle, dict):
+-            raise BundleClientError("Every bundle entry must be a JSON object")
+-        name = bundle.get("name")
+-        kwargs = bundle.get("kwargs")
+-        if not isinstance(name, str) or not isinstance(kwargs, dict):
+-            raise BundleClientError("Each bundle requires a name and kwargs object")
+-        names.append(name)
+-    if len(names) != len(set(names)):
+-        raise BundleClientError("Bundle names must be unique")
+-    if names.count(DEV_BUNDLE_NAME) != 1:
+-        raise BundleClientError(f"Bundle config must contain exactly one {DEV_BUNDLE_NAME!r}")
+-    for name in ("lakehouse-uat", "lakehouse-prod"):
+-        if names.count(name) != 1:
+-            raise BundleClientError(f"Bundle config must contain exactly one {name!r}")
+-    return bundles, original_bytes
+-
+-
+-def _dev_bundle(bundles: list[dict[str, Any]]) -> dict[str, Any]:
+-    """Return the configured development bundle entry."""
+-    return next(bundle for bundle in bundles if bundle["name"] == DEV_BUNDLE_NAME)
+-
+-
+-def show_selected_ref(config_path: Path) -> str:
+-    """Return the currently configured development tracking ref.
+-
+-    Args:
+-        config_path: JSON `dag_bundle_config_list` file.
+-
+-    Returns:
+-        Current `lakehouse-dev` tracking ref.
+-
+-    Raises:
+-        BundleClientError: If the bundle configuration is invalid.
+-    """
+-    bundles, _ = _load_bundle_config(config_path)
+-    tracking_ref = _dev_bundle(bundles)["kwargs"].get("tracking_ref")
+-    if not isinstance(tracking_ref, str) or not tracking_ref:
+-        raise BundleClientError("lakehouse-dev has no configured tracking_ref")
+-    return tracking_ref
+-
+-
+-def validate_feature_ref(
+-    tracking_ref: str,
+-    allowed_prefixes: Sequence[str] = (),
+-) -> None:
+-    """Validate a requested Git branch without contacting the Git server.
+-
+-    Args:
+-        tracking_ref: Branch name selected for the development bundle.
+-        allowed_prefixes: Optional required branch prefixes, such as
+-            ``("feature/",)``.
+-
+-    Raises:
+-        BundleClientError: If the ref is protected, malformed, or outside the
+-            configured prefix policy.
+-    """
+-    if not isinstance(tracking_ref, str) or not tracking_ref.strip():
+-        raise BundleClientError("tracking ref must be a non-empty branch name")
+-    if tracking_ref in PROTECTED_REFS:
+-        raise BundleClientError("dev bundle cannot track a protected ref")
+-    if allowed_prefixes and not any(tracking_ref.startswith(prefix) for prefix in allowed_prefixes):
+-        raise BundleClientError("tracking ref does not match the configured branch prefix")
+-    try:
+-        # This fixed Git argv uses no shell; the supplied branch name is
+-        # separately constrained and validated with `git check-ref-format`.
+-        result = subprocess.run(  # nosec B603, B607
+-            ["git", "check-ref-format", f"refs/heads/{tracking_ref}"],
+-            check=False,
+-            capture_output=True,
+-            text=True,
+-            timeout=10,
+-        )
+-    except (OSError, subprocess.TimeoutExpired) as error:
+-        raise BundleClientError("Unable to validate the branch name with Git") from error
+-    if result.returncode != 0:
+-        raise BundleClientError("tracking ref is not a valid Git branch name")
+-
+-
+-def _atomic_write(config_path: Path, content: bytes) -> None:
+-    """Replace a config file atomically while preserving its mode."""
+-    temporary_path: Path | None = None
+-    try:
+-        file_mode = config_path.stat().st_mode & 0o777
+-        with tempfile.NamedTemporaryFile(mode="wb", dir=config_path.parent, prefix=f".{config_path.name}.", delete=False) as temporary_file:
+-            temporary_path = Path(temporary_file.name)
+-            temporary_file.write(content)
+-            temporary_file.flush()
+-            os.fsync(temporary_file.fileno())
+-        os.chmod(temporary_path, file_mode)
+-        os.replace(temporary_path, config_path)
+-    except OSError as error:
+-        if temporary_path is not None:
+-            try:
+-                temporary_path.unlink(missing_ok=True)
+-            except OSError:
+-                pass
+-        raise BundleClientError(f"Cannot atomically update bundle config: {error}") from error
+-
+-
+-def select_dev_ref(settings: dict[str, Any], tracking_ref: str) -> tuple[str, str]:
+-    """Select and apply a feature ref for the dev bundle only.
+-
+-    Args:
+-        settings: Validated client settings from ``load_client_settings``.
+-        tracking_ref: Requested feature branch name.
+-
+-    Returns:
+-        A pair containing the old and new dev refs after successful apply.
+-
+-    Raises:
+-        BundleClientError: If validation, configuration update, or apply fails.
+-    """
+-    validate_feature_ref(tracking_ref, settings["allowed_branch_prefixes"])
+-    config_path: Path = settings["bundle_config_path"]
+-    bundles, original_bytes = _load_bundle_config(config_path)
+-    dev_bundle = _dev_bundle(bundles)
+-    previous_ref = dev_bundle["kwargs"].get("tracking_ref")
+-    if not isinstance(previous_ref, str) or not previous_ref:
+-        raise BundleClientError("lakehouse-dev has no configured tracking_ref")
+-    if tracking_ref == previous_ref:
+-        return previous_ref, tracking_ref
+-
+-    uat_before = json.dumps(next(b for b in bundles if b["name"] == "lakehouse-uat"))
+-    prod_before = json.dumps(next(b for b in bundles if b["name"] == "lakehouse-prod"))
+-    dev_bundle["kwargs"]["tracking_ref"] = tracking_ref
+-    if json.dumps(next(b for b in bundles if b["name"] == "lakehouse-uat")) != uat_before or json.dumps(next(b for b in bundles if b["name"] == "lakehouse-prod")) != prod_before:
+-        raise BundleClientError("Refusing update because UAT or production config changed")
+-
+-    updated_bytes = (json.dumps(bundles, indent=2) + "\n").encode("utf-8")
+-    command = [argument.replace(APPLY_CONFIG_PLACEHOLDER, str(config_path)) for argument in settings["apply_command"]]
+-    _atomic_write(config_path, updated_bytes)
+-    try:
+-        subprocess.run(  # nosec B603 - trusted operator argv list; shell is disabled.
+-            command,
+-            check=True,
+-            shell=False,
+-            capture_output=True,
+-            text=True,
+-            timeout=settings["apply_timeout_seconds"],
+-        )
+-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+-        try:
+-            _atomic_write(config_path, original_bytes)
+-            subprocess.run(  # nosec B603 - same trusted argv list reapplies the restored config; shell is disabled.
+-                command,
+-                check=True,
+-                shell=False,
+-                capture_output=True,
+-                text=True,
+-                timeout=settings["apply_timeout_seconds"],
+-            )
+-        except (BundleClientError, OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as rollback_error:
+-            raise BundleClientError("Apply failed and restoring the previous bundle config could not be fully applied") from rollback_error
+-        raise BundleClientError(f"Applying the selected branch failed; restored {previous_ref!r}") from error
+-    return previous_ref, tracking_ref
+-
+-
+-def build_parser() -> argparse.ArgumentParser:
+-    """Create the command line parser for the bundle client."""
+-    parser = argparse.ArgumentParser(description="Select the feature branch tracked by Airflow's dev bundle.")
+-    parser.add_argument(
+-        "--settings",
+-        type=Path,
+-        required=True,
+-        help="Path to deployment-owned, non-secret client settings YAML.",
+-    )
+-    subparsers = parser.add_subparsers(dest="operation", required=True)
+-    subparsers.add_parser("show", help="Show the currently selected dev branch.")
+-    select_parser = subparsers.add_parser("select", help="Select a feature branch for dev.")
+-    select_parser.add_argument("--branch", required=True, help="Git feature branch name.")
+-    return parser
+-
+-
+-def main(argv: Sequence[str] | None = None) -> int:
+-    """Run the branch-selection client and return a process exit status."""
+-    args = build_parser().parse_args(argv)
+-    try:
+-        settings = load_client_settings(args.settings)
+-        config_path: Path = settings["bundle_config_path"]
+-        if args.operation == "show":
+-            print(f"lakehouse-dev tracking_ref: {show_selected_ref(config_path)}")
+-            return 0
+-        previous_ref, selected_ref = select_dev_ref(settings, args.branch)
+-        if previous_ref == selected_ref:
+-            print(f"lakehouse-dev already tracks {selected_ref!r}; no apply was needed")
+-        else:
+-            print(f"Updated lakehouse-dev tracking_ref from {previous_ref!r} to " f"{selected_ref!r}; deployment apply succeeded. Airflow fetch/parse " "readiness must be confirmed in Airflow.")
+-        return 0
+-    except BundleClientError as error:
+-        print(f"Branch selection failed: {error}", file=sys.stderr)
+-        return 2
+-
+-
+-if __name__ == "__main__":
+-    raise SystemExit(main())
+diff --git a/airflow_bundle_config.example.json b/airflow_bundle_config.example.json
+deleted file mode 100644
+index 0ed5cd4..0000000
+--- a/airflow_bundle_config.example.json
++++ /dev/null
+@@ -1,47 +0,0 @@
+-[
+-  {
+-    "name": "lakehouse-dev",
+-    "classpath": "airflow.providers.git.bundles.git.GitDagBundle",
+-    "kwargs": {
+-      "repo_url": "https://git.example.com/org/opensource-lakehouse.git",
+-      "git_conn_id": "lakehouse_git",
+-      "tracking_ref": "feature/example-change",
+-      "refresh_interval": 300,
+-      "sparse_dirs": [
+-        "dags",
+-        "configs",
+-        "notebooks"
+-      ]
+-    }
+-  },
+-  {
+-    "name": "lakehouse-uat",
+-    "classpath": "airflow.providers.git.bundles.git.GitDagBundle",
+-    "kwargs": {
+-      "repo_url": "https://git.example.com/org/opensource-lakehouse.git",
+-      "git_conn_id": "lakehouse_git",
+-      "tracking_ref": "uat",
+-      "refresh_interval": 300,
+-      "sparse_dirs": [
+-        "dags",
+-        "configs",
+-        "notebooks"
+-      ]
+-    }
+-  },
+-  {
+-    "name": "lakehouse-prod",
+-    "classpath": "airflow.providers.git.bundles.git.GitDagBundle",
+-    "kwargs": {
+-      "repo_url": "https://git.example.com/org/opensource-lakehouse.git",
+-      "git_conn_id": "lakehouse_git",
+-      "tracking_ref": "main",
+-      "refresh_interval": 300,
+-      "sparse_dirs": [
+-        "dags",
+-        "configs",
+-        "notebooks"
+-      ]
+-    }
+-  }
+-]
+diff --git a/dags/.airflowignore b/dags/.airflowignore
+deleted file mode 100644
+index 0480bdd..0000000
+--- a/dags/.airflowignore
++++ /dev/null
+@@ -1,2 +0,0 @@
+-dag_factory.py
+-dag_defaults.py
+diff --git a/dags/dag_defaults.py b/dags/dag_defaults.py
+deleted file mode 100644
+index 62e87a7..0000000
+--- a/dags/dag_defaults.py
++++ /dev/null
+@@ -1,116 +0,0 @@
+-"""Shared default settings for repository Airflow DAGs."""
+-
+-import re
+-from datetime import datetime
+-from pathlib import Path
+-from typing import Any, Iterable
+-
+-SUPPORTED_ENVIRONMENTS = ("dev", "uat", "prod")
+-MAIN_BUNDLE_NAME = "lakehouse-main"
+-PROD_BUNDLE_NAME = "lakehouse-prod"
+-UAT_BUNDLE_NAME = "lakehouse-uat"
+-# Data product bundles from the lakehouse platform: <product>-main and <product>-uat.
+-PRODUCT_BUNDLE_PATTERN = re.compile(r"^(?P<product>[a-z][a-z0-9]{1,19})-(?P<branch>main|uat)$")
+-LEGACY_PRODUCT_NAMES = ("lakehouse",)
+-
+-
+-def bundle_name_for(dags_dir: Path) -> str | None:
+-    """Return the Airflow bundle name from the checkout path, if it has one.
+-
+-    Args:
+-        dags_dir: ``dags/`` directory inside the current bundle checkout.
+-
+-    Returns:
+-        The bundle name, or ``None`` for non-versioned local DAG paths.
+-    """
+-    resolved_dags_dir = dags_dir.resolve()
+-    tracking_repo_dir = next(
+-        (parent for parent in resolved_dags_dir.parents if parent.name == "tracking_repo"),
+-        None,
+-    )
+-    if tracking_repo_dir is not None:
+-        bundle_name = tracking_repo_dir.parent.name
+-    else:
+-        versions_dir = next(
+-            (parent for parent in resolved_dags_dir.parents if parent.name == "versions"),
+-            None,
+-        )
+-        if versions_dir is None:
+-            return None
+-        bundle_name = versions_dir.parent.name
+-    return bundle_name
+-
+-
+-def product_for_bundle(dags_dir: Path) -> str | None:
+-    """Return the data product whose bundle holds these DAGs.
+-
+-    Args:
+-        dags_dir: ``dags/`` directory inside the current bundle checkout.
+-
+-    Returns:
+-        The product name for ``<product>-main``/``<product>-uat`` bundles, or
+-        ``None`` for legacy ``lakehouse-*`` bundles and local paths.
+-    """
+-    match = PRODUCT_BUNDLE_PATTERN.fullmatch(bundle_name_for(dags_dir) or "")
+-    if match is None or match.group("product") in LEGACY_PRODUCT_NAMES:
+-        return None
+-    return match.group("product")
+-
+-
+-def identity_for_bundle(dags_dir: Path) -> tuple[str, str]:
+-    """Select the DAG ID prefix and workload environment for a bundle.
+-
+-    Args:
+-        dags_dir: ``dags/`` directory inside the current bundle checkout.
+-
+-    Returns:
+-        A ``(dag_id_prefix, workload_environment)`` pair: ``("<product>-main",
+-        "prod")`` and ``("<product>-uat", "uat")`` for data product bundles, so
+-        DAG IDs start with the bundle name the token broker checks;
+-        ``("main", "prod")`` and ``("uat", "uat")`` for the legacy
+-        ``lakehouse-*`` bundles; and ``("dev", "dev")`` for other bundle names
+-        or non-versioned local DAG paths.
+-    """
+-    bundle_name = bundle_name_for(dags_dir)
+-    if bundle_name in (MAIN_BUNDLE_NAME, PROD_BUNDLE_NAME):
+-        return "main", "prod"
+-    if bundle_name == UAT_BUNDLE_NAME:
+-        return "uat", "uat"
+-    if product_for_bundle(dags_dir) is not None:
+-        return bundle_name, "prod" if bundle_name.endswith("-main") else "uat"
+-    return "dev", "dev"
+-
+-
+-def standard_dag_kwargs(
+-    environment: str,
+-    workload_name: str,
+-    description: str,
+-    schedule: str | None,
+-    tags: Iterable[str] = (),
+-    dag_id_prefix: str | None = None,
+-) -> dict[str, Any]:
+-    """Build the common settings used by manual lakehouse DAGs.
+-
+-    Args:
+-        environment: Environment identity declared by this Git branch.
+-        workload_name: Short name used in the DAG ID and tags.
+-        description: Human-readable description for the DAG.
+-        schedule: Airflow schedule; ``None`` creates a manual-only DAG.
+-        tags: Additional workload-specific tags.
+-        dag_id_prefix: Optional DAG ID/tag prefix when it differs from the
+-            workload environment, such as ``main`` for the ``prod`` config.
+-
+-    Returns:
+-        Keyword arguments for constructing an Airflow DAG with standard
+-        schedule, start-date, catchup, tagging, and bundle-version settings.
+-    """
+-    prefix = dag_id_prefix or environment
+-    return {
+-        "dag_id": f"{prefix}-{workload_name}",
+-        "description": description,
+-        "start_date": datetime(2024, 1, 1),
+-        "schedule": schedule,
+-        "catchup": False,
+-        "tags": [prefix, *tags],
+-        "rerun_with_latest_version": False,
+-    }
+diff --git a/dags/dag_factory.py b/dags/dag_factory.py
+deleted file mode 100644
+index 9c6962c..0000000
+--- a/dags/dag_factory.py
++++ /dev/null
+@@ -1,548 +0,0 @@
+-"""Build standard Spark workload DAGs from minimal workload metadata."""
+-
+-import hashlib
+-import json
+-import logging
+-import os
+-import re
+-import ssl
+-import sys
+-from collections.abc import Mapping, Sequence
+-from dataclasses import dataclass
+-from pathlib import Path
+-from typing import Any
+-from urllib.error import HTTPError, URLError
+-from urllib.parse import quote, urlsplit
+-from urllib.request import Request, urlopen
+-
+-import docker
+-from airflow import DAG
+-from airflow.exceptions import AirflowException
+-from airflow.operators.python import PythonOperator
+-from airflow.utils.trigger_rule import TriggerRule
+-
+-from dag_defaults import identity_for_bundle, product_for_bundle, standard_dag_kwargs
+-from spark_output import redact_spark_output
+-
+-DAGS_DIR = Path(__file__).resolve().parent
+-BUNDLE_ROOT = DAGS_DIR.parent
+-CONFIG_DIR = BUNDLE_ROOT / "configs"
+-CONTAINER_BUNDLE_ROOT = Path("/opt/lakehouse-bundle")
+-LOGGER = logging.getLogger(__name__)
+-
+-
+-@dataclass(frozen=True)
+-class SparkWorkload:
+-    """Normalized workload entry used to construct submit tasks."""
+-
+-    task_name: str
+-    entrypoint_file: str
+-    runs_after: tuple[str, ...]
+-
+-
+-def _validate_environment_config(environment: str, config_dir: str, product: str | None = None) -> None:
+-    """Validate the bundle version's environment YAML before Spark startup.
+-
+-    Args:
+-        environment: Environment selected by the current Git bundle name.
+-        config_dir: Config directory from the parsed bundle version.
+-        product: Data product of the bundle, if any; selects its config folder.
+-    """
+-    sys.path.insert(0, str(BUNDLE_ROOT / "notebooks" / "common"))
+-    from config_loader import load_environment_config
+-
+-    load_environment_config(environment, config_dir, product)
+-
+-
+-def _normalize_workloads(workloads: Sequence[Mapping[str, Any]]) -> tuple[SparkWorkload, ...]:
+-    """Validate workload declarations and their task dependency graph.
+-
+-    Args:
+-        workloads: Workload mappings with task name, entrypoint, and optional
+-            predecessor task names.
+-
+-    Returns:
+-        Validated workloads in declaration order.
+-
+-    Raises:
+-        ValueError: If declarations are invalid, dependencies are unknown, or
+-            the dependency graph contains a cycle.
+-        FileNotFoundError: If an entrypoint file is missing from the bundle.
+-    """
+-    if not workloads:
+-        raise ValueError("At least one Spark workload entrypoint is required.")
+-
+-    normalized = []
+-    allowed_keys = {"task_name", "entrypoint_file", "runs_after"}
+-    for declaration in workloads:
+-        if not isinstance(declaration, Mapping):
+-            raise ValueError("Each workload must be a mapping with task_name and entrypoint_file fields.")
+-        unknown_keys = set(declaration) - allowed_keys
+-        if unknown_keys:
+-            raise ValueError(f"Unknown workload fields: {', '.join(sorted(unknown_keys))}")
+-
+-        task_name = declaration.get("task_name")
+-        entrypoint_file = declaration.get("entrypoint_file")
+-        raw_dependencies = declaration.get("runs_after", ())
+-        if not isinstance(task_name, str) or not re.fullmatch(r"[a-zA-Z0-9_.-]+", task_name):
+-            raise ValueError(f"Invalid Spark workload task name: {task_name!r}")
+-        if not isinstance(entrypoint_file, str):
+-            raise ValueError(f"Invalid Python entrypoint for workload {task_name!r}.")
+-        if Path(entrypoint_file).name != entrypoint_file or not entrypoint_file.endswith(".py"):
+-            raise ValueError("Each entrypoint must be a Python filename in notebooks/workload/.")
+-        if raw_dependencies is None:
+-            dependencies = ()
+-        elif isinstance(raw_dependencies, str):
+-            dependencies = (raw_dependencies,)
+-        elif isinstance(raw_dependencies, Sequence):
+-            dependencies = tuple(raw_dependencies)
+-        else:
+-            raise ValueError(f"runs_after for workload {task_name!r} must be a task name or sequence.")
+-        if any(not isinstance(dependency, str) for dependency in dependencies):
+-            raise ValueError(f"runs_after for workload {task_name!r} must contain task names.")
+-        if len(set(dependencies)) != len(dependencies):
+-            raise ValueError(f"runs_after for workload {task_name!r} contains duplicate task names.")
+-
+-        workload_path = BUNDLE_ROOT / "notebooks" / "workload" / entrypoint_file
+-        if not workload_path.is_file():
+-            raise FileNotFoundError(f"Spark workload entrypoint does not exist: {workload_path}")
+-        normalized.append(SparkWorkload(task_name, entrypoint_file, dependencies))
+-
+-    task_names = {workload.task_name for workload in normalized}
+-    if len(task_names) != len(normalized):
+-        raise ValueError("Spark workload task names must be unique.")
+-    for workload in normalized:
+-        unknown_dependencies = set(workload.runs_after) - task_names
+-        if unknown_dependencies:
+-            raise ValueError(f"Workload {workload.task_name!r} runs after unknown tasks: " f"{', '.join(sorted(unknown_dependencies))}.")
+-        if workload.task_name in workload.runs_after:
+-            raise ValueError(f"Workload {workload.task_name!r} cannot run after itself.")
+-
+-    resolved = set()
+-    unresolved = {workload.task_name: set(workload.runs_after) for workload in normalized}
+-    while unresolved:
+-        ready = {name for name, dependencies in unresolved.items() if dependencies <= resolved}
+-        if not ready:
+-            raise ValueError("Spark workload runs_after dependencies contain a cycle.")
+-        resolved.update(ready)
+-        for name in ready:
+-            del unresolved[name]
+-
+-    return tuple(normalized)
+-
+-
+-def _container_name(dag_id: str, run_id: str) -> str:
+-    """Build a stable, Docker-safe container name for one DAG run.
+-
+-    Args:
+-        dag_id: Airflow DAG identifier.
+-        run_id: Unique identifier for the DAG run.
+-
+-    Returns:
+-        A Docker container name unique to the DAG run.
+-    """
+-    safe_dag_id = re.sub(r"[^a-zA-Z0-9_.-]", "-", dag_id)
+-    run_suffix = hashlib.sha256(run_id.encode("utf-8")).hexdigest()[:12]
+-    return f"lakehouse-{safe_dag_id[:40]}-{run_suffix}"
+-
+-
+-def _docker_host_bundle_path(bundle_source: str) -> str:
+-    """Translate an Airflow-container bundle path to its Docker-host path.
+-
+-    Args:
+-        bundle_source: Versioned bundle root as seen inside the Airflow
+-            scheduler container.
+-
+-    Returns:
+-        The same bundle revision under the host-mounted bundle root.
+-
+-    Raises:
+-        AirflowException: If the bundle path is outside the configured
+-            container root or either root is missing or invalid.
+-    """
+-    host_root_value = os.environ.get("LAKEHOUSE_BUNDLE_HOST_ROOT")
+-    container_root_value = os.environ.get("LAKEHOUSE_BUNDLE_CONTAINER_ROOT")
+-    if not host_root_value or not container_root_value:
+-        raise AirflowException("LAKEHOUSE_BUNDLE_HOST_ROOT and LAKEHOUSE_BUNDLE_CONTAINER_ROOT must be configured.")
+-
+-    host_root = Path(host_root_value)
+-    container_root = Path(container_root_value)
+-    if not host_root.is_absolute() or not container_root.is_absolute():
+-        raise AirflowException("Airflow bundle host and container roots must be absolute paths.")
+-
+-    resolved_bundle = Path(bundle_source).resolve()
+-    resolved_container_root = container_root.resolve()
+-    try:
+-        relative_bundle = resolved_bundle.relative_to(resolved_container_root)
+-    except ValueError as error:
+-        raise AirflowException("The versioned DAG bundle path is outside LAKEHOUSE_BUNDLE_CONTAINER_ROOT.") from error
+-
+-    return str(host_root / relative_bundle)
+-
+-
+-def _read_broker_control_token() -> str:
+-    """Read the scheduler-only broker control credential without logging it."""
+-    path = Path(os.environ.get("AIRFLOW_BROKER_CONTROL_TOKEN_FILE", "/run/secrets/airflow_broker_control_token"))
+-    try:
+-        token = path.read_text(encoding="utf-8").strip()
+-    except OSError as error:
+-        raise AirflowException("The broker control credential is unavailable.") from error
+-    if len(token) < 32:
+-        raise AirflowException("The broker control credential is invalid.")
+-    return token
+-
+-
+-def _broker_request(method: str, route: str, payload: Mapping[str, Any] | None, credential: str) -> dict[str, Any] | None:
+-    """Call the private broker using verified TLS and sanitized failures.
+-
+-    Args:
+-        method: HTTP method.
+-        route: Versioned broker route, with no credential in the URL.
+-        payload: Optional JSON request body.
+-        credential: Control token or run-scoped capability; never logged.
+-
+-    Returns:
+-        Parsed JSON response, or ``None`` for an empty success response.
+-
+-    Raises:
+-        AirflowException: If the broker request fails or returns an invalid body.
+-    """
+-    base_url = os.environ.get("LAKEHOUSE_BROKER_URL", "https://airflow-token-broker:8443").rstrip("/")
+-    parsed_base_url = urlsplit(base_url)
+-    if any(
+-        (
+-            parsed_base_url.scheme != "https",
+-            parsed_base_url.hostname != "airflow-token-broker",
+-            parsed_base_url.port != 8443,
+-            bool(parsed_base_url.path),
+-            bool(parsed_base_url.query),
+-            bool(parsed_base_url.fragment),
+-            bool(parsed_base_url.username),
+-            bool(parsed_base_url.password),
+-        )
+-    ):
+-        raise AirflowException("The token broker endpoint is not the approved private HTTPS service.")
+-    ca_file = os.environ.get("LAKEHOUSE_BROKER_CA_FILE", "/run/certs/airflow-token-broker-ca.crt")
+-    try:
+-        context = ssl.create_default_context(cafile=ca_file)
+-        body = json.dumps(payload).encode("utf-8") if payload is not None else None
+-        request = Request(
+-            f"{base_url}{route}",
+-            data=body,
+-            headers={"Authorization": f"Bearer {credential}", "Accept": "application/json", "Content-Type": "application/json"},
+-            method=method,
+-        )
+-        with urlopen(request, context=context, timeout=5) as response:  # nosec B310 - scheme, host, and CA are pinned above.
+-            raw = response.read()
+-        return json.loads(raw) if raw else None
+-    except (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
+-        raise AirflowException("The token broker request failed; sensitive response details were suppressed.") from None
+-
+-
+-def _create_spark_container(
+-    image: str,
+-    network: str,
+-    data_network: str,
+-    docker_url: str,
+-    bundle_source: str,
+-    bundle_target: str,
+-    environment: str,
+-    aws_region: str,
+-    broker_ca_host_path: str,
+-    broker_ca_container_path: str,
+-    product: str = "",
+-    **context: object,
+-) -> dict[str, str]:
+-    """Start one reusable Spark container and mount the DAG bundle into it.
+-
+-    Args:
+-        image: Spark image containing ``spark-submit`` and its dependencies.
+-        network: Optional Docker network for lakehouse services.
+-        docker_url: Docker daemon URL.
+-        bundle_source: Host path to this versioned bundle checkout.
+-        bundle_target: Container path where the bundle is mounted.
+-        environment: Selected lakehouse environment.
+-        aws_region: AWS-compatible region passed to Spark applications.
+-        product: Data product of the bundle (empty for legacy bundles).
+-        **context: Airflow task context, including the DAG and run IDs.
+-
+-    Returns:
+-        The container name for downstream submit and cleanup tasks.
+-    """
+-    dag_id = context["dag"].dag_id
+-    container_name = _container_name(dag_id, str(context["run_id"]))
+-    docker_bundle_source = _docker_host_bundle_path(bundle_source)
+-    control_token = _read_broker_control_token()
+-    registration = _broker_request(
+-        "POST",
+-        "/v1/runs",
+-        {"dag_id": dag_id, "run_id": str(context["run_id"])},
+-        control_token,
+-    )
+-    if not isinstance(registration, dict):
+-        raise AirflowException("The token broker returned an invalid registration response.")
+-    run_handle = registration.get("run_handle")
+-    capability = registration.get("renewal_capability")
+-    initial_token = registration.get("access_token")
+-    if not all(isinstance(value, str) and value for value in (run_handle, capability, initial_token)):
+-        raise AirflowException("The token broker returned an incomplete registration response.")
+-
+-    volumes = {
+-        docker_bundle_source: {"bind": bundle_target, "mode": "ro"},
+-        broker_ca_host_path: {"bind": broker_ca_container_path, "mode": "ro"},
+-    }
+-    client = docker.DockerClient(base_url=docker_url)
+-    container = None
+-    try:
+-        try:
+-            client.containers.get(container_name).remove(force=True)
+-        except docker.errors.NotFound:
+-            pass
+-
+-        container = client.containers.create(
+-            image=image,
+-            command=["sleep infinity"],
+-            name=container_name,
+-            network=network,
+-            entrypoint=["/bin/bash", "-lc"],
+-            labels={"lakehouse-local.role": "airflow-spark-run", "lakehouse-local.run-handle": run_handle},
+-            environment={
+-                "AWS_REGION": aws_region,
+-                "AWS_DEFAULT_REGION": aws_region,
+-                "AWS_EC2_METADATA_DISABLED": "true",
+-                "LAKEHOUSE_TOKEN_PROVIDER": "airflow",  # nosec B105 - provider selector, not a credential.
+-                "LAKEHOUSE_INITIAL_ACCESS_TOKEN": initial_token,
+-                "LAKEHOUSE_TOKEN_BROKER_URL": os.environ.get("LAKEHOUSE_BROKER_URL", "https://airflow-token-broker:8443"),
+-                "LAKEHOUSE_TOKEN_BROKER_CA": broker_ca_container_path,
+-                "LAKEHOUSE_RUN_HANDLE": run_handle,
+-                "LAKEHOUSE_RUN_CAPABILITY": capability,
+-                "SPARK_CONTAINER_ROLE": "driver",
+-                "SPARK_MASTER_HOST": "spark",
+-                "LAKEHOUSE_ENVIRONMENT": environment,
+-                "LAKEHOUSE_PRODUCT": product,
+-                "PYTHONPATH": bundle_target,
+-            },
+-            volumes=volumes,
+-        )
+-        client.networks.get(data_network).connect(container)
+-        container.start()
+-        LOGGER.info("Started reusable Spark container %s for DAG run %s", container_name, context["run_id"])
+-        return {"container_name": container.name, "run_handle": run_handle}
+-    except Exception:
+-        if container is not None:
+-            try:
+-                container.remove(force=True)
+-            except docker.errors.DockerException:
+-                LOGGER.warning("Failed Spark container cleanup after startup error.")
+-        try:
+-            _broker_request("DELETE", f"/v1/runs/{quote(run_handle, safe='')}", None, control_token)
+-        except AirflowException:
+-            LOGGER.warning("Broker run revocation failed after Spark startup error; bounded expiry remains active.")
+-        raise
+-    finally:
+-        client.close()
+-
+-
+-def _submit_spark_job(
+-    entrypoint_file: str,
+-    environment: str,
+-    docker_url: str,
+-    spark_master: str,
+-    **context: object,
+-) -> None:
+-    """Run one Spark application inside the container created for this DAG run.
+-
+-    Args:
+-        entrypoint_file: Python job path relative to the bundle root.
+-        environment: Selected lakehouse environment.
+-        docker_url: Docker daemon URL.
+-        spark_master: Spark master URL; defaults to local mode.
+-        **context: Airflow task context, including task instance and DAG run.
+-
+-    Raises:
+-        AirflowException: If ``spark-submit`` exits with a non-zero status.
+-    """
+-    task_instance = context["ti"]
+-    run_state = task_instance.xcom_pull(task_ids="create_cluster")
+-    container_name = run_state.get("container_name") if isinstance(run_state, dict) else None
+-    if not container_name:
+-        raise AirflowException("The Spark container was not registered for this DAG run.")
+-
+-    container_entrypoint = CONTAINER_BUNDLE_ROOT / "notebooks" / "workload" / entrypoint_file
+-    command = [
+-        "/opt/spark/bin/spark-submit",
+-        "--master",
+-        spark_master,
+-        str(container_entrypoint),
+-        "--environment",
+-        environment,
+-        "--config-dir",
+-        str(CONTAINER_BUNDLE_ROOT / "configs"),
+-    ]
+-
+-    client = docker.DockerClient(base_url=docker_url)
+-    try:
+-        container = client.containers.get(container_name)
+-        result = container.exec_run(command, workdir=str(CONTAINER_BUNDLE_ROOT), demux=False)
+-        if result.exit_code != 0:
+-            LOGGER.error("Spark workload %s failed; sanitized output follows:\n%s", entrypoint_file, redact_spark_output(result.output or b""))
+-            raise AirflowException(f"spark-submit for {entrypoint_file} exited with status {result.exit_code}.")
+-        else:
+-            LOGGER.info("Spark workload %s succeeded; sanitized output follows:\n%s", entrypoint_file, redact_spark_output(result.output or b""))
+-    finally:
+-        client.close()
+-
+-
+-def _stop_spark_container(docker_url: str, **context: object) -> None:
+-    """Stop and remove this DAG run's Spark container, including after failures.
+-
+-    Args:
+-        docker_url: Docker daemon URL.
+-        **context: Airflow task context, including the DAG and run IDs.
+-    """
+-    container_name = _container_name(context["dag"].dag_id, str(context["run_id"]))
+-    run_state = context["ti"].xcom_pull(task_ids="create_cluster") or {}
+-    run_handle = run_state.get("run_handle") if isinstance(run_state, dict) else None
+-    cleanup_errors = []
+-    client = docker.DockerClient(base_url=docker_url)
+-    try:
+-        try:
+-            container = client.containers.get(container_name)
+-        except docker.errors.NotFound:
+-            LOGGER.info("Spark container %s is already absent.", container_name)
+-        else:
+-            try:
+-                container.remove(force=True)
+-                LOGGER.info("Stopped and removed Spark container %s.", container_name)
+-            except docker.errors.DockerException:
+-                cleanup_errors.append("container")
+-    finally:
+-        client.close()
+-    if isinstance(run_handle, str) and run_handle:
+-        try:
+-            control_token = _read_broker_control_token()
+-            _broker_request("DELETE", f"/v1/runs/{quote(run_handle, safe='')}", None, control_token)
+-        except AirflowException:
+-            cleanup_errors.append("broker")
+-    if cleanup_errors:
+-        raise AirflowException("Airflow writer-run cleanup was incomplete; broker expiry remains the fallback.")
+-
+-
+-def _verify_workloads_succeeded() -> None:
+-    """Provide an all-success leaf after every workload and cleanup task."""
+-
+-
+-def create_spark_dag(
+-    dag_name: str,
+-    workloads: Sequence[Mapping[str, Any]],
+-    schedule: str | None,
+-) -> DAG:
+-    """Create a standard config-validation and reusable Spark-container DAG.
+-
+-    Args:
+-        dag_name: Name used in the Airflow DAG ID and description.
+-        workloads: Ordered mappings with ``task_name`` and ``entrypoint_file``;
+-            optional ``runs_after`` names predecessor tasks. Entrypoint files
+-            may repeat. Workloads without predecessors run in parallel.
+-        schedule: Airflow schedule; pass ``None`` for manual-only execution.
+-
+-    Returns:
+-        A DAG with config validation, container lifecycle, and submit tasks.
+-
+-    Raises:
+-        ValueError: If a workload declaration or dependency graph is invalid.
+-        FileNotFoundError: If a workload file is missing.
+-    """
+-    if not re.fullmatch(r"[a-zA-Z0-9_.-]+", dag_name):
+-        raise ValueError(f"Invalid DAG name: {dag_name!r}")
+-    normalized_workloads = _normalize_workloads(workloads)
+-
+-    dag_id_prefix, environment = identity_for_bundle(DAGS_DIR)
+-    product = product_for_bundle(DAGS_DIR)
+-    workload_names = [workload.task_name for workload in normalized_workloads]
+-    spark_job_image = os.environ.get("LAKEHOUSE_SPARK_IMAGE", "airflow-spark-job:3.5.5_1.8.1")
+-    spark_master = os.environ.get("LAKEHOUSE_SPARK_MASTER", "local[*]")
+-    docker_url = os.environ.get("LAKEHOUSE_DOCKER_URL", "unix://var/run/docker.sock")
+-    docker_network = os.environ.get("LAKEHOUSE_SPARK_DOCKER_NETWORK")
+-    data_network = os.environ.get("LAKEHOUSE_SPARK_DATA_NETWORK", "lakehouse-local_data-access")
+-    aws_region = os.environ.get("AWS_REGION", "us-east-1")
+-    broker_ca_host_path = os.environ.get("LAKEHOUSE_BROKER_CA_HOST_PATH", "")
+-    broker_ca_container_path = os.environ.get("LAKEHOUSE_BROKER_CA_CONTAINER_PATH", "/run/certs/airflow-token-broker-ca.crt")
+-    if not docker_network or not Path(broker_ca_host_path).is_absolute():
+-        raise AirflowException("The Spark networks and broker CA mount must be configured.")
+-
+-    dag = DAG(
+-        **standard_dag_kwargs(
+-            environment=environment,
+-            workload_name=dag_name,
+-            description=(f"Run {dag_name} using {', '.join(workload_names)} in one Spark container " f"for the {environment} bundle environment."),
+-            schedule=schedule,
+-            tags=("spark",),
+-            dag_id_prefix=dag_id_prefix,
+-        )
+-    )
+-    validate_environment = PythonOperator(
+-        task_id="validate_environment",
+-        python_callable=_validate_environment_config,
+-        op_kwargs={"environment": environment, "config_dir": str(CONFIG_DIR), "product": product},
+-        dag=dag,
+-    )
+-    create_cluster = PythonOperator(
+-        task_id="create_cluster",
+-        python_callable=_create_spark_container,
+-        op_kwargs={
+-            "image": spark_job_image,
+-            "network": docker_network,
+-            "data_network": data_network,
+-            "docker_url": docker_url,
+-            "bundle_source": str(BUNDLE_ROOT),
+-            "bundle_target": str(CONTAINER_BUNDLE_ROOT),
+-            "environment": environment,
+-            "aws_region": aws_region,
+-            "broker_ca_host_path": broker_ca_host_path,
+-            "broker_ca_container_path": broker_ca_container_path,
+-            "product": product or "",
+-        },
+-        dag=dag,
+-    )
+-
+-    submit_tasks = {}
+-    for workload in normalized_workloads:
+-        submit_task = PythonOperator(
+-            task_id=f"submit_{workload.task_name}",
+-            python_callable=_submit_spark_job,
+-            op_kwargs={
+-                "entrypoint_file": workload.entrypoint_file,
+-                "environment": environment,
+-                "docker_url": docker_url,
+-                "spark_master": spark_master,
+-            },
+-            dag=dag,
+-        )
+-        submit_tasks[workload.task_name] = submit_task
+-
+-    stop_cluster = PythonOperator(
+-        task_id="stop_cluster",
+-        python_callable=_stop_spark_container,
+-        op_kwargs={"docker_url": docker_url},
+-        trigger_rule=TriggerRule.ALL_DONE,
+-        dag=dag,
+-    )
+-    verify_workloads = PythonOperator(
+-        task_id="verify_workloads_succeeded",
+-        python_callable=_verify_workloads_succeeded,
+-        dag=dag,
+-    )
+-
+-    validate_environment >> create_cluster
+-    for workload in normalized_workloads:
+-        submit_task = submit_tasks[workload.task_name]
+-        if workload.runs_after:
+-            for predecessor in workload.runs_after:
+-                submit_tasks[predecessor] >> submit_task
+-        else:
+-            create_cluster >> submit_task
+-        submit_task >> stop_cluster
+-        submit_task >> verify_workloads
+-    stop_cluster >> verify_workloads
+-    return dag
+diff --git a/dags/lakehouse.py b/dags/lakehouse.py
+new file mode 100644
+index 0000000..cda2052
+--- /dev/null
++++ b/dags/lakehouse.py
+@@ -0,0 +1,4 @@
++# Airflow DAGs for this repository, built by the lakehouse platform from workflows/*.json.
++from lakehouse_dags import load_workflows
++
++load_workflows(globals(), __file__)
+diff --git a/dags/spark_output.py b/dags/spark_output.py
+deleted file mode 100644
+index 7369d2c..0000000
+--- a/dags/spark_output.py
++++ /dev/null
+@@ -1,16 +0,0 @@
+-"""Helpers for safely surfacing Spark task diagnostics."""
+-
+-import re
+-
+-_JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")
+-_SENSITIVE_VALUE_RE = re.compile(r"(?i)\b(authorization|access[_ -]?token|refresh[_ -]?token|token|client[_ -]?secret|password|secret|credential)\b" r"([\"']?\s*[:=]\s*[\"']?)([^\s,;\"'}]+)")
+-
+-
+-def redact_spark_output(output: bytes | str) -> str:
+-    """Keep useful Spark failure context while removing common credential forms."""
+-    text = output.decode("utf-8", errors="replace") if isinstance(output, bytes) else output
+-    text = re.sub(r"(?i)(bearer\s+)[A-Za-z0-9._~+/-]+=*", r"\1<redacted>", text)
+-    text = _SENSITIVE_VALUE_RE.sub(r"\1\2<redacted>", text)
+-    text = _JWT_RE.sub("<redacted-jwt>", text)
+-    text = re.sub(r"\b[A-Za-z0-9_-]{48,}\b", "<redacted-value>", text)
+-    return text[-20000:]
+diff --git a/dags/test_environment.py b/dags/test_environment.py
+deleted file mode 100644
+index 2e235d2..0000000
+--- a/dags/test_environment.py
++++ /dev/null
+@@ -1,28 +0,0 @@
+-"""Declare this branch's Spark workloads and Airflow schedule."""
+-
+-import sys
+-from pathlib import Path
+-
+-sys.path.insert(0, str(Path(__file__).resolve().parent))
+-from dag_factory import create_spark_dag  # noqa: E402
+-
+-dag = create_spark_dag(
+-    dag_name="test_environment",
+-    workloads=(
+-        {
+-            "task_name": "test_environment_first",
+-            "entrypoint_file": "test_environment.py",
+-        },
+-        {
+-            "task_name": "test_environment_second",
+-            "entrypoint_file": "test_environment.py",
+-            "runs_after": ("test_environment_first",),
+-        },
+-        {
+-            "task_name": "count_sample_rows",
+-            "entrypoint_file": "count_sample_rows.py",
+-            "runs_after": ("test_environment_first",),
+-        },
+-    ),
+-    schedule=None,
+-)
+diff --git a/notebooks/common/cli.py b/notebooks/common/cli.py
+index b6cc0d9..14bf1de 100644
+--- a/notebooks/common/cli.py
++++ b/notebooks/common/cli.py
+@@ -1,10 +1,24 @@
+ """Shared command-line argument parsing for environment-based Spark jobs."""
+ 
+ import argparse
+-from typing import Any
++import sys
++from typing import Any, Optional
+ 
+ from .config_loader import SUPPORTED_ENVIRONMENTS
+ 
++# Airflow passes a task's workflow "args" after this separator:
++#   spark-submit job.py --environment uat --config-dir ... -- --date 2026-11-10
++TASK_ARGS_SEPARATOR = "--"
++
++
++def _split(argv: Optional[list]) -> tuple:
++    """Split an argument list at the first ``--`` into (standard, task) arguments."""
++    arguments = list(sys.argv[1:] if argv is None else argv)
++    if TASK_ARGS_SEPARATOR in arguments:
++        index = arguments.index(TASK_ARGS_SEPARATOR)
++        return arguments[:index], arguments[index + 1 :]
++    return arguments, []
++
+ 
+ def parse_args(argv: Any = None) -> argparse.Namespace:
+     """Parse the standard environment and config-directory arguments.
+@@ -13,8 +27,10 @@ def parse_args(argv: Any = None) -> argparse.Namespace:
+         argv: Optional argument list, primarily for direct invocation.
+ 
+     Returns:
+-        Parsed environment and optional config directory.
++        Parsed environment and optional config directory, plus ``task_args``:
++        the workflow task's arguments after ``--`` (empty when there are none).
+     """
++    standard, extra = _split(argv)
+     parser = argparse.ArgumentParser(description="Run a Spark workload using an explicit environment config.")
+     parser.add_argument(
+         "--environment",
+@@ -27,4 +43,20 @@ def parse_args(argv: Any = None) -> argparse.Namespace:
+         default=None,
+         help="Directory containing the selected YAML (default: repository configs/).",
+     )
+-    return parser.parse_args(argv)
++    args = parser.parse_args(standard)
++    args.task_args = extra
++    return args
++
++
++def task_args(argv: Any = None) -> list:
++    """The workflow task's arguments after ``--``; empty in Jupyter and for direct runs without them.
++
++    Args:
++        argv: Optional argument list; defaults to ``sys.argv[1:]``.
++
++    Returns:
++        The arguments after the first ``--``, unchanged.
++    """
++    if argv is None and "ipykernel" in sys.modules:
++        return []
++    return _split(argv)[1]
+diff --git a/scripts/code_quality.sh b/scripts/code_quality.sh
+index 41d55ce..576f55b 100755
+--- a/scripts/code_quality.sh
++++ b/scripts/code_quality.sh
+@@ -5,8 +5,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+ cd "${REPO_ROOT}"
+ 
+-readonly TARGETS=(./airflow_bundle_client.py ./notebooks ./scripts ./tests ./dags)
+-readonly BANDIT_TARGETS=(./airflow_bundle_client.py ./notebooks ./scripts ./dags)
++readonly TARGETS=(./notebooks ./scripts ./tests ./dags)
++readonly BANDIT_TARGETS=(./notebooks ./scripts ./dags)
+ 
+ log() {
+     local result="$1"
+diff --git a/tests/jenkins_deployment/test_airflow_bundle_client.py b/tests/jenkins_deployment/test_airflow_bundle_client.py
+deleted file mode 100644
+index 70b82dd..0000000
+--- a/tests/jenkins_deployment/test_airflow_bundle_client.py
++++ /dev/null
+@@ -1,236 +0,0 @@
+-"""Tests for the dev Git bundle branch-selection client."""
+-
+-import json
+-import subprocess
+-from pathlib import Path
+-from unittest.mock import Mock, call
+-
+-import pytest
+-from hypothesis import given, strategies as st
+-
+-import airflow_bundle_client as client
+-from dags.spark_output import redact_spark_output
+-
+-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+-
+-
+-def _bundle_config(dev_ref: str = "feature/initial") -> list[dict]:
+-    """Return a small three-environment Git bundle configuration."""
+-    return [
+-        {
+-            "name": "lakehouse-dev",
+-            "classpath": "airflow.providers.git.bundles.git.GitDagBundle",
+-            "kwargs": {"tracking_ref": dev_ref, "git_conn_id": "lakehouse_git"},
+-        },
+-        {
+-            "name": "lakehouse-uat",
+-            "classpath": "airflow.providers.git.bundles.git.GitDagBundle",
+-            "kwargs": {"tracking_ref": "uat", "git_conn_id": "lakehouse_git"},
+-        },
+-        {
+-            "name": "lakehouse-prod",
+-            "classpath": "airflow.providers.git.bundles.git.GitDagBundle",
+-            "kwargs": {"tracking_ref": "main", "git_conn_id": "lakehouse_git"},
+-        },
+-    ]
+-
+-
+-def _client_settings(config_path: Path) -> dict:
+-    """Return validated-shape settings for the client API."""
+-    return {
+-        "bundle_config_path": config_path,
+-        "dev_bundle_name": "lakehouse-dev",
+-        "allowed_branch_prefixes": ["feature/"],
+-        "apply_timeout_seconds": 30,
+-        "apply_command": ["apply-bundles", "--config", "{config_path}"],
+-    }
+-
+-
+-def _write_config(config_path: Path, bundles: list[dict] | None = None) -> bytes:
+-    """Write a bundle config and return its original bytes."""
+-    config_path.write_text(json.dumps(bundles or _bundle_config()), encoding="utf-8")
+-    return config_path.read_bytes()
+-
+-
+-def test_show_selected_ref_reads_only_dev_bundle(tmp_path: Path) -> None:
+-    config_path = tmp_path / "bundles.json"
+-    _write_config(config_path)
+-
+-    assert client.show_selected_ref(config_path) == "feature/initial"
+-
+-
+-def test_select_changes_only_dev_and_invokes_apply_without_shell(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+-    config_path = tmp_path / "bundles.json"
+-    _write_config(config_path)
+-    completed = subprocess.CompletedProcess(args=["git"], returncode=0)
+-    mocked_subprocess_run = Mock(return_value=completed)
+-    monkeypatch.setattr(client.subprocess, "run", mocked_subprocess_run)
+-    previous_ref, selected_ref = client.select_dev_ref(_client_settings(config_path), "feature/try-new-branch")
+-
+-    bundles = json.loads(config_path.read_bytes())
+-    assert (previous_ref, selected_ref) == ("feature/initial", "feature/try-new-branch")
+-    assert bundles[0]["kwargs"]["tracking_ref"] == "feature/try-new-branch"
+-    assert bundles[1]["kwargs"]["tracking_ref"] == "uat"
+-    assert bundles[2]["kwargs"]["tracking_ref"] == "main"
+-    assert mocked_subprocess_run.call_args_list == [
+-        call(
+-            ["git", "check-ref-format", "refs/heads/feature/try-new-branch"],
+-            check=False,
+-            capture_output=True,
+-            text=True,
+-            timeout=10,
+-        ),
+-        call(
+-            ["apply-bundles", "--config", str(config_path)],
+-            check=True,
+-            shell=False,
+-            capture_output=True,
+-            text=True,
+-            timeout=30,
+-        ),
+-    ]
+-
+-
+-@pytest.mark.parametrize("protected_ref", ["dev", "uat", "main"])
+-def test_protected_ref_is_rejected_before_apply(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, protected_ref: str) -> None:
+-    config_path = tmp_path / "bundles.json"
+-    original_bytes = _write_config(config_path)
+-    mocked_subprocess_run = Mock()
+-    monkeypatch.setattr(client.subprocess, "run", mocked_subprocess_run)
+-
+-    with pytest.raises(client.BundleClientError, match="protected ref"):
+-        client.select_dev_ref(_client_settings(config_path), protected_ref)
+-
+-    mocked_subprocess_run.assert_not_called()
+-    assert config_path.read_bytes() == original_bytes
+-
+-
+-@given(st.sampled_from(["dev", "uat", "main"]))
+-def test_property_protected_refs_never_pass_validation(protected_ref: str) -> None:
+-    with pytest.raises(client.BundleClientError, match="protected ref"):
+-        client.validate_feature_ref(protected_ref)
+-
+-
+-def test_configured_prefix_policy_is_enforced() -> None:
+-    with pytest.raises(client.BundleClientError, match="branch prefix"):
+-        client.validate_feature_ref("bugfix/one", ["feature/"])
+-
+-
+-def test_invalid_git_branch_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+-    config_path = tmp_path / "bundles.json"
+-    original_bytes = _write_config(config_path)
+-
+-    def mocked_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess:
+-        return subprocess.CompletedProcess(args=args[0], returncode=1, stderr="invalid")
+-
+-    monkeypatch.setattr(client.subprocess, "run", mocked_run)
+-
+-    with pytest.raises(client.BundleClientError, match="valid Git branch"):
+-        client.select_dev_ref(_client_settings(config_path), "feature/bad branch")
+-
+-    assert config_path.read_bytes() == original_bytes
+-
+-
+-def test_apply_failure_restores_original_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+-    config_path = tmp_path / "bundles.json"
+-    original_bytes = _write_config(config_path)
+-    calls = 0
+-
+-    def mocked_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+-        nonlocal calls
+-        calls += 1
+-        if command[0] == "git":
+-            return subprocess.CompletedProcess(args=command, returncode=0)
+-        if calls == 2:
+-            raise subprocess.CalledProcessError(1, command)
+-        return subprocess.CompletedProcess(args=command, returncode=0)
+-
+-    monkeypatch.setattr(client.subprocess, "run", mocked_run)
+-
+-    with pytest.raises(client.BundleClientError, match="restored 'feature/initial'"):
+-        client.select_dev_ref(_client_settings(config_path), "feature/next")
+-
+-    assert config_path.read_bytes() == original_bytes
+-    assert calls == 3
+-
+-
+-def test_bundle_config_requires_all_three_unique_bundle_names(tmp_path: Path) -> None:
+-    config_path = tmp_path / "bundles.json"
+-    _write_config(config_path, _bundle_config()[:2])
+-
+-    with pytest.raises(client.BundleClientError, match="lakehouse-prod"):
+-        client.show_selected_ref(config_path)
+-
+-
+-def test_example_bundle_config_has_isolated_environment_dag_paths() -> None:
+-    bundles = json.loads((REPOSITORY_ROOT / "airflow_bundle_config.example.json").read_text(encoding="utf-8"))
+-    by_name = {bundle["name"]: bundle for bundle in bundles}
+-
+-    assert set(by_name) == {"lakehouse-dev", "lakehouse-uat", "lakehouse-prod"}
+-    assert by_name["lakehouse-uat"]["kwargs"]["tracking_ref"] == "uat"
+-    assert by_name["lakehouse-prod"]["kwargs"]["tracking_ref"] == "main"
+-    assert by_name["lakehouse-dev"]["kwargs"]["tracking_ref"].startswith("feature/")
+-    environment_bundles = (
+-        "lakehouse-dev",
+-        "lakehouse-uat",
+-        "lakehouse-prod",
+-    )
+-    for bundle_name in environment_bundles:
+-        sparse_dirs = by_name[bundle_name]["kwargs"]["sparse_dirs"]
+-        assert "dags" in sparse_dirs
+-        assert "configs" in sparse_dirs
+-        assert "notebooks" in sparse_dirs
+-
+-
+-def test_dag_factory_reuses_spark_container_for_bundle_workloads() -> None:
+-    dag_path = REPOSITORY_ROOT / "dags" / "test_environment.py"
+-    source = dag_path.read_text(encoding="utf-8")
+-    factory_path = REPOSITORY_ROOT / "dags" / "dag_factory.py"
+-    factory = factory_path.read_text(encoding="utf-8")
+-
+-    assert dag_path.is_file()
+-    assert 'dag_name="test_environment"' in source
+-    assert '"task_name": "test_environment_first"' in source
+-    assert '"task_name": "test_environment_second"' in source
+-    assert '"task_name": "count_sample_rows"' in source
+-    assert '"entrypoint_file": "count_sample_rows.py"' in source
+-    assert '"runs_after": ("test_environment_first",)' in source
+-    assert "schedule=None" in source
+-    assert "create_spark_dag(" in source
+-    assert 'task_id="validate_environment"' in factory
+-    assert 'task_id="create_cluster"' in factory
+-    assert 'task_id="stop_cluster"' in factory
+-    assert 'task_id="verify_workloads_succeeded"' in factory
+-    assert "stop_cluster >> verify_workloads" in factory
+-    assert "_submit_spark_job" in factory
+-    assert "TriggerRule.ALL_DONE" in factory
+-    assert '"/opt/spark/bin/spark-submit"' in factory
+-    assert 'str(CONTAINER_BUNDLE_ROOT / "configs")' in factory
+-    assert '"spark-files"' not in factory
+-    assert "identity_for_bundle(DAGS_DIR)" in factory
+-    assert "dag_id_prefix=dag_id_prefix" in factory
+-    assert "SparkSubmitOperator" not in factory
+-    assert "RELEASE_ID" not in factory
+-
+-
+-def test_spark_failure_output_redacts_credentials() -> None:
+-    secret = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+-    jwt = "eyJhbGciOiJSUzI1NiJ9.payloadsegment.signaturesegment"
+-    output = f'Authorization: Bearer {jwt}\naccess_token="{secret}" token={secret}'
+-
+-    redacted = redact_spark_output(output)
+-
+-    assert jwt not in redacted
+-    assert secret not in redacted
+-    assert "<redacted>" in redacted
+-
+-
+-def test_settings_reject_shell_string_apply_command(tmp_path: Path) -> None:
+-    settings_path = tmp_path / "client.yml"
+-    settings_path.write_text(
+-        "bundle_config_path: /tmp/bundles.json\n" "allowed_branch_prefixes: [feature/]\n" "apply_command: 'apply --config {config_path}'\n",
+-        encoding="utf-8",
+-    )
+-
+-    with pytest.raises(client.BundleClientError, match="list of command arguments"):
+-        client.load_client_settings(settings_path)
+diff --git a/tests/jenkins_deployment/test_airflow_writer_token_contract.py b/tests/jenkins_deployment/test_airflow_writer_token_contract.py
+deleted file mode 100644
+index 6fb9035..0000000
+--- a/tests/jenkins_deployment/test_airflow_writer_token_contract.py
++++ /dev/null
+@@ -1,13 +0,0 @@
+-"""Contract checks for the Airflow-to-Spark writer-token handoff."""
+-
+-from pathlib import Path
+-
+-ROOT = Path(__file__).resolve().parents[2]
+-
+-
+-def test_broker_requests_send_the_supplied_credential_as_bearer_auth():
+-    """Broker calls must authenticate with the control token or run capability."""
+-    source = (ROOT / "dags" / "dag_factory.py").read_text(encoding="utf-8")
+-
+-    assert '"Authorization": f"Bearer {credential}"' in source
+-    assert '"Authorization": f"******"' not in source
+diff --git a/tests/workload_foundation/conftest.py b/tests/workload_foundation/conftest.py
+index 4876eb4..b7048d4 100644
+--- a/tests/workload_foundation/conftest.py
++++ b/tests/workload_foundation/conftest.py
+@@ -8,7 +8,6 @@ from types import ModuleType
+ import pytest
+ 
+ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+-sys.path.insert(0, str(REPOSITORY_ROOT / "dags"))
+ sys.path.insert(0, str(REPOSITORY_ROOT / "notebooks" / "workload"))
+ sys.path.insert(0, str(REPOSITORY_ROOT / "notebooks" / "common"))
+ HYPOTHESIS_SEED = int(os.environ.get("HYPOTHESIS_SEED", "0"))
+diff --git a/tests/workload_foundation/test_cli.py b/tests/workload_foundation/test_cli.py
+new file mode 100644
+index 0000000..7901665
+--- /dev/null
++++ b/tests/workload_foundation/test_cli.py
+@@ -0,0 +1,45 @@
++"""Task arguments after ``--`` (workflow "args"), for Airflow runs and direct runs."""
++
++import sys
++
++import pytest
++from hypothesis import given, settings
++from hypothesis import strategies as st
++
++from notebooks.common import cli
++
++STANDARD = ["--environment", "uat", "--config-dir", "/opt/lakehouse-bundle/configs"]
++
++
++def test_without_extras_task_args_are_empty():
++    args = cli.parse_args(STANDARD)
++    assert (args.environment, args.config_dir, args.task_args) == ("uat", "/opt/lakehouse-bundle/configs", [])
++    assert cli.task_args(STANDARD) == []
++
++
++def test_extras_after_the_separator_are_returned_unchanged():
++    argv = STANDARD + ["--", "--date", "2026-11-10", "two words", "--"]
++    assert cli.parse_args(argv).task_args == ["--date", "2026-11-10", "two words", "--"]
++    assert cli.task_args(argv) == ["--date", "2026-11-10", "two words", "--"]
++
++
++def test_standard_arguments_are_still_validated():
++    with pytest.raises(SystemExit):
++        cli.parse_args(["--environment", "staging", "--", "--x"])
++    with pytest.raises(SystemExit):
++        cli.parse_args(["--unknown"])
++
++
++def test_jupyter_has_no_task_arguments(monkeypatch):
++    monkeypatch.setitem(sys.modules, "ipykernel", object())
++    monkeypatch.setattr(sys, "argv", ["kernel", "--", "--date", "x"])
++    assert cli.task_args() == []
++
++
++ARGUMENT = st.text(st.characters(categories=("L", "N", "P", "S", "Zs")), min_size=1, max_size=20)
++
++
++@settings(print_blob=True)
++@given(after=st.lists(ARGUMENT, max_size=6))
++def test_p5_everything_after_the_first_separator_is_the_task_args(after):
++    assert cli.parse_args(STANDARD + ["--"] + after).task_args == after
+diff --git a/tests/workload_foundation/test_init_environment.py b/tests/workload_foundation/test_init_environment.py
+index 32211a1..fe72d32 100644
+--- a/tests/workload_foundation/test_init_environment.py
++++ b/tests/workload_foundation/test_init_environment.py
+@@ -1,7 +1,5 @@
+ """Example-based checks for the environment initialization workload."""
+ 
+-import pytest
+-
+ from config_loader import EnvironmentConfig, load_environment_config
+ from test_environment import (
+     SAMPLE_ROWS,
+@@ -9,7 +7,6 @@ from test_environment import (
+     SAMPLE_TABLE_NAME,
+     write_sample_dataset,
+ )
+-from dag_defaults import identity_for_bundle, standard_dag_kwargs
+ 
+ 
+ class _FakeDataFrameWriter:
+@@ -90,58 +87,6 @@ def test_config_loader_exposes_arbitrary_nested_settings(tmp_path):
+     assert config.to_dict()["spark"]["labels"] == ["sample", "lakehouse"]
+ 
+ 
+-def test_standard_dag_settings_share_manual_environment_defaults():
+-    """DAGs receive the same schedule, version, tags, and ID conventions."""
+-    settings = standard_dag_kwargs(
+-        environment="uat",
+-        workload_name="refresh_dimensions",
+-        description="Refresh the dimensions.",
+-        schedule=None,
+-        tags=("spark",),
+-    )
+-
+-    assert settings["dag_id"] == "uat-refresh_dimensions"
+-    assert settings["schedule"] is None
+-    assert settings["catchup"] is False
+-    assert settings["tags"] == ["uat", "spark"]
+-    assert settings["rerun_with_latest_version"] is False
+-    assert settings["start_date"].isoformat() == "2024-01-01T00:00:00"
+-
+-
+-@pytest.mark.parametrize(
+-    ("bundle_name", "expected_identity"),
+-    [
+-        ("lakehouse-main", ("main", "prod")),
+-        ("lakehouse-prod", ("main", "prod")),
+-        ("lakehouse-uat", ("uat", "uat")),
+-        ("lakehouse-dev", ("dev", "dev")),
+-        ("lakehouse-feature-42", ("dev", "dev")),
+-    ],
+-)
+-def test_bundle_name_selects_environment(tmp_path, bundle_name, expected_identity):
+-    """Stable Airflow bundle names select environment independent of Git ref."""
+-    dags_dir = tmp_path / "dag_bundles" / bundle_name / "tracking_repo" / "dags"
+-    dags_dir.mkdir(parents=True)
+-
+-    assert identity_for_bundle(dags_dir) == expected_identity
+-
+-
+-def test_versioned_bundle_checkout_selects_environment(tmp_path):
+-    """Task-version checkout paths also retain the configured bundle name."""
+-    dags_dir = tmp_path / "dag_bundles" / "lakehouse-main" / "versions" / "abc123" / "dags"
+-    dags_dir.mkdir(parents=True)
+-
+-    assert identity_for_bundle(dags_dir) == ("main", "prod")
+-
+-
+-def test_local_dag_path_defaults_to_dev(tmp_path):
+-    """A non-versioned local DAG folder uses the development environment."""
+-    dags_dir = tmp_path / "dags"
+-    dags_dir.mkdir()
+-
+-    assert identity_for_bundle(dags_dir) == ("dev", "dev")
+-
+-
+ def test_smoke_write_is_limited_to_dedicated_table_and_child_path():
+     """The retained smoke test overwrites only its dedicated table path."""
+     config = EnvironmentConfig(
+diff --git a/tests/workload_foundation/test_product_bundles.py b/tests/workload_foundation/test_product_bundles.py
+index b2d7fae..80175ff 100644
+--- a/tests/workload_foundation/test_product_bundles.py
++++ b/tests/workload_foundation/test_product_bundles.py
+@@ -1,48 +1,11 @@
+-"""Data product bundles: DAG ID prefixes, environments, and per-product configs."""
++"""Per-product configs: configs/<product>/<env>.yml before configs/<env>.yml.
++
++Bundle names, DAG ID prefixes, and environments are the platform's job (lakehouse_dags).
++"""
+ 
+ import pytest
+-from hypothesis import given, settings
+-from hypothesis import strategies as st
+ 
+ from config_loader import load_environment_config
+-from dag_defaults import identity_for_bundle, product_for_bundle
+-
+-PRODUCTS = st.from_regex(r"[a-z][a-z0-9]{1,19}", fullmatch=True).filter(lambda name: name != "lakehouse")
+-
+-
+-def bundle_dags(tmp_path, bundle_name, versioned=False):
+-    middle = ("versions", "abc123") if versioned else ("tracking_repo",)
+-    dags_dir = tmp_path.joinpath("dag_bundles", bundle_name, *middle, "dags")
+-    dags_dir.mkdir(parents=True, exist_ok=True)
+-    return dags_dir
+-
+-
+-@pytest.mark.parametrize(
+-    ("bundle_name", "identity", "product"),
+-    [
+-        ("default-main", ("default-main", "prod"), "default"),
+-        ("default-uat", ("default-uat", "uat"), "default"),
+-        ("sales-main", ("sales-main", "prod"), "sales"),
+-        ("lakehouse-main", ("main", "prod"), None),
+-        ("lakehouse-uat", ("uat", "uat"), None),
+-        ("default-dev", ("dev", "dev"), None),
+-        ("Sales-main", ("dev", "dev"), None),
+-    ],
+-)
+-def test_product_bundles_prefix_dag_ids_with_the_bundle_name(tmp_path, bundle_name, identity, product):
+-    for versioned in (False, True):
+-        dags_dir = bundle_dags(tmp_path, bundle_name, versioned)
+-        assert identity_for_bundle(dags_dir) == identity
+-        assert product_for_bundle(dags_dir) == product
+-
+-
+-@settings(print_blob=True)
+-@given(product=PRODUCTS, branch=st.sampled_from(["main", "uat"]))
+-def test_every_product_bundle_gives_its_own_prefix(tmp_path_factory, product, branch):
+-    dags_dir = bundle_dags(tmp_path_factory.mktemp("bundle"), f"{product}-{branch}")
+-    prefix, environment = identity_for_bundle(dags_dir)
+-    assert prefix == f"{product}-{branch}" and environment == {"main": "prod", "uat": "uat"}[branch]
+-    assert product_for_bundle(dags_dir) == product
+ 
+ 
+ def write(path, database):
+diff --git a/workflows/test_environment.json b/workflows/test_environment.json
+new file mode 100644
+index 0000000..29e89a5
+--- /dev/null
++++ b/workflows/test_environment.json
+@@ -0,0 +1,26 @@
++{
++  "apiVersion": "lakehouse.local/workflow/v1",
++  "name": "test_environment",
++  "description": "Create the smoke table twice, then count its rows, in one Spark container.",
++  "schedule": null,
++  "tasks": [
++    {
++      "name": "test_environment_first",
++      "entrypoint": "test_environment.py"
++    },
++    {
++      "name": "test_environment_second",
++      "entrypoint": "test_environment.py",
++      "runs_after": [
++        "test_environment_first"
++      ]
++    },
++    {
++      "name": "count_sample_rows",
++      "entrypoint": "count_sample_rows.py",
++      "runs_after": [
++        "test_environment_first"
++      ]
++    }
++  ]
++}
+-- 
+2.55.0
+

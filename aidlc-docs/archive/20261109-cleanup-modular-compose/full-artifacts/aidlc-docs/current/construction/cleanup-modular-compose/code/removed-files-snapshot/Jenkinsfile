@@ -1,0 +1,33 @@
+pipeline {
+    agent any
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+    }
+
+    stages {
+        stage('Unit tests') {
+            steps {
+                sh '''#!/usr/bin/env bash
+set -euo pipefail
+python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else "Python 3.11+ is required")'
+python3 -m venv .venv-ci
+.venv-ci/bin/python --version
+.venv-ci/bin/python -m pip install --disable-pip-version-check -r tests/requirements-pbt.txt
+printf 'Hypothesis seed: %s\\n' "$BUILD_NUMBER" | tee hypothesis-seed.txt
+.venv-ci/bin/python -m pytest -q tests --hypothesis-seed="$BUILD_NUMBER" 2>&1 | tee pytest.log
+'''
+            }
+        }
+    }
+
+    post {
+        always {
+            archiveArtifacts artifacts: 'hypothesis-seed.txt,pytest.log', allowEmptyArchive: true
+        }
+        cleanup {
+            sh 'rm -rf .venv-ci'
+        }
+    }
+}

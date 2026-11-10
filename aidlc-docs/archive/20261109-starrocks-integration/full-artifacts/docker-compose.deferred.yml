@@ -1,0 +1,14 @@
+# Deferred integration inventory only. JupyterHub and Jenkins are implemented in the main
+# Compose file, and StarRocks in docker-compose.starrocks.yml. The remaining listed
+# services are not configured to run.
+# This inventory is not included by scripts/lakehouse.sh.
+x-deferred-services:
+  airflow:
+    status: unsupported-pending-migration
+    future-service-set: [airflow-postgres, airflow-init, airflow-api-server, airflow-scheduler, airflow-dag-processor, airflow-triggerer]
+  jupyterhub:
+    status: implemented-in-main-compose
+  jenkins:
+    status: implemented-in-main-compose
+  starrocks:
+    status: implemented-in-docker-compose.starrocks.yml

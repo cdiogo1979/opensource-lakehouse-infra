@@ -1,0 +1,82 @@
+{
+  "intent_id": "20261028-keycloak-polaris-catalog-bootstrap",
+  "name": "Keycloak and Polaris Default Data Product Bootstrap",
+  "objective": "Replace the supported FreeIPA/Hive bootstrap path with a local Keycloak, Apache Polaris, RustFS, and Spark platform-admin journey for the default data product across production, dev, and UAT.",
+  "date": "2026-10-28",
+  "scope": "U1–U4 design, implementation, local bootstrap and role verification, and deploy handoff. No migration, production deployment, or deferred Airflow/JupyterHub/Jenkins/StarRocks integration.",
+  "workstreams": [
+    "U1: Keycloak, Polaris, PostgreSQL, and RustFS runtime foundation",
+    "U2: OIDC identity, Polaris RBAC mapping, and membership reconciliation",
+    "U3: RustFS buckets, scoped policies, and STS credential verification",
+    "U4: default product catalogs/namespaces/grants, Spark smoke tables, and four-role matrix",
+    "Deploy handoff: local operator sequence, evidence, limitations, and PR draft"
+  ],
+  "verification": {
+    "status": "waived",
+    "user_accepted": true,
+    "details": "The user explicitly accepted the remaining gaps and instructed to proceed on 2026-10-28. U1 runtime readiness passed. U2 writer authentication, wrong issuer, invalid signature, wrong audience, expired-token rejection, analyst membership revocation, and Keycloak outage/reconciliation behavior passed. U2 remains incomplete for the human PKCE browser callback because no owner username or callback URI was supplied, and some duplicate/missing-user, unsupported-group, and incomplete-Polaris-update diagnostics remain untested. U3 bucket and scoped STS checks passed. U4 end-to-end default-product bootstrap, Spark smoke-table create/write/read across prod/dev/UAT, safe rerun, and positive/negative read/write matrix for all four roles passed. This is an explicit verification waiver, not a production pass or deployment authorization."
+  },
+  "artifact_inventory_complete": true,
+  "summary": {
+    "major_requirements": [
+      "Create the initial default data product in production, dev, and UAT using separate buckets, catalogs, and namespaces.",
+      "Use Keycloak groups and Polaris grants for developer, analyst, owner, and writer behavior.",
+      "Use Polaris-vended scoped RustFS credentials for Spark Iceberg access.",
+      "Keep bootstrap reruns safe and preserve existing bucket objects and named-volume state."
+    ],
+    "design_decisions": [
+      "Replace FreeIPA with Keycloak OIDC and Hive Metastore with Apache Polaris; retire MIT Kerberos from the supported bootstrap runtime.",
+      "Use `bucket-default`, `bucket-default-dev`, and `bucket-default-uat`; catalogs `lakehouse`, `lakehouse-dev`, and `lakehouse-uat`; namespaces `default_lh`, `default_lhdev`, and `default_lhuat`.",
+      "Keep only Keycloak, PostgreSQL, Polaris, and RustFS as long-running core services; run Spark on demand.",
+      "User approved `polaris.realm-context.require-header=false` for the single configured realm because Iceberg 1.8.1 omits the realm header during vended credential refresh; revisit before adding realms."
+    ],
+    "implementation_decisions": [
+      "Add explicit protected credential preparation, realm bootstrap, bucket/catalog/grant bootstrap, reconciliation, auth verification, and Spark smoke-table scripts.",
+      "Run positive and negative access checks through temporary role identities; remove test identities and probe rows afterward.",
+      "Preserve `.runtime` credentials and named volumes; archive workflow documentation only and do not deploy or open a PR during handoff."
+    ],
+    "deviations": [
+      "U2 closure is verification-waived for the unconfigured human PKCE callback and remaining reconciliation failure-path diagnostics.",
+      "This intent verifies a local single-node environment only and does not establish production readiness, HA, or multi-host support."
+    ],
+    "superseded_decisions": [
+      "FreeIPA groups and Hive Metastore are superseded in the supported runtime by Keycloak OIDC/groups and Polaris.",
+      "Earlier shared-bucket and single-catalog directions are superseded by three environment buckets, catalogs, and namespaces."
+    ]
+  },
+  "canonical_updates": [
+    {
+      "path": "aidlc-docs/knowledge/hive-dremio-rustfs/application-design.md",
+      "content": "# Current Application Design — Open Source Lakehouse Infrastructure V2\n\nThis canonical file remains under its earlier knowledge namespace for continuity. The current target is the local `opensource-lakehouse-infra-v2` bootstrap described in [`../opensource-lakehouse-infra-v2/application-design.md`](../opensource-lakehouse-infra-v2/application-design.md). The original Hive/FreeIPA implementation is preserved in the intent archives.\n\n## Current scope\n\nThe supported local journey uses Keycloak for OIDC identities and groups, Apache Polaris for Iceberg catalogs and authorization, RustFS for S3-compatible storage, and Spark for smoke-table operations. It creates a `default` data product across production, dev, and UAT. FreeIPA, MIT Kerberos, and Hive are retired from the supported Compose runtime. Airflow, JupyterHub, Jenkins, and StarRocks remain deferred and unsupported by this bootstrap.\n\n## Verification boundary\n\nThe fresh local bootstrap, U1–U4 checks, and all four role read/write matrices passed as documented in the intent archive and deploy handoff. U2 closed under a user-accepted verification waiver: the actual human PKCE callback and some reconciliation failure-path diagnostics were not verified. The project is a local single-node setup and has not been certified for production, HA, or multi-host operation.\n"
+    },
+    {
+      "path": "aidlc-docs/knowledge/hive-dremio-rustfs/functional-design/lakehouse-workload-and-access.md",
+      "content": "# Current Functional Design — Lakehouse Product Access\n\nThis file retains its earlier knowledge namespace for continuity. The complete current architecture is in [`../../opensource-lakehouse-infra-v2/application-design.md`](../../opensource-lakehouse-infra-v2/application-design.md); previous Hive/FreeIPA workload behavior is preserved in the immutable intent archives.\n\n## Data product layout\n\n| Environment | Keycloak group / Polaris role | Catalog | Namespace | RustFS bucket | Access |\n|---|---|---|---|---|---|\n| Production | `role-default-analyst`, `role-default-owner`, `role-default-writer` | `lakehouse` | `default_lh` | `bucket-default` | Analyst reads; owner and writer read/write |\n| Dev | `role-default-developer`, `role-default-owner`, `role-default-writer` | `lakehouse-dev` | `default_lhdev` | `bucket-default-dev` | Developer reads/writes; owner and writer read/write |\n| UAT | `role-default-owner`, `role-default-writer` | `lakehouse-uat` | `default_lhuat` | `bucket-default-uat` | Owner and writer read/write |\n\nAll roles may read all three environments except the analyst, who is limited to production. The developer writes only to dev. The owner manages the product's Polaris resources and data across environments. The writer service identity reads and writes all environments.\n\n## Authorization and workload boundaries\n\nKeycloak groups supply identity and role claims. Polaris maps the approved role claims to Polaris principal roles and catalog grants. Polaris-mediated Iceberg access vends scoped, short-lived RustFS credentials. Direct S3 access is not granted to ordinary users. These layers are distinct: a Keycloak membership alone does not create a Polaris grant, and Polaris SQL/catalog authorization does not grant direct RustFS administration.\n\nThe current reconciler uses the protected local Keycloak bootstrap administrator. Replace it with a least-privilege identity before shared deployment. Airflow, JupyterHub, Jenkins, and StarRocks are deferred; no migration or integration is claimed.\n\n## Verification and limitations\n\nU4 verified the Spark smoke-table journey and positive/negative read/write behavior for developer, analyst, owner, and writer in all environments. U2 verified wrong-audience and expired-token rejection and Keycloak-outage behavior. The user accepted closure with a verification waiver for the human PKCE callback and some reconciliation failure-path diagnostics. Existing unexpired tokens can remain usable at Polaris while Keycloak is unavailable; new issuance and membership reconciliation fail. The local configuration's `polaris.realm-context.require-header=false` is approved only for the single configured `lakehouse` realm; restore strict header enforcement or fix Iceberg header propagation before adding realms.\n"
+    },
+    {
+      "path": "aidlc-docs/knowledge/opensource-lakehouse-infra-v2/application-design.md",
+      "content": "# Application Design — Keycloak, Polaris, and RustFS Bootstrap\n\n## Purpose\n\nThis project provides a local Docker Compose platform-admin journey that bootstraps an initial `default` lakehouse data product without migrating legacy Hive or FreeIPA state. The journey provisions identity groups, storage buckets, Polaris catalogs and namespaces, authorization grants, and Spark smoke tables across production, dev, and UAT.\n\n## Components\n\n- **Keycloak** provides the `lakehouse` OIDC realm, the product role groups, the initial `platform-admin` identity, and the `write-service-account` client.\n- **Apache Polaris** provides Iceberg REST and management APIs, catalogs, namespaces, principal roles, grants, and scoped RustFS credential vending.\n- **PostgreSQL** stores Keycloak and Polaris state in separate databases and named volumes.\n- **RustFS** provides the three S3-compatible environment buckets. Bootstrap creates missing resources and preserves existing objects.\n- **Host scripts** prepare protected credentials, start/check/stop local services, and run the idempotent data-product bootstrap.\n- **Spark** runs an on-demand Iceberg smoke-table job using the writer OAuth identity and Polaris-vended S3 credentials.\n\nAirflow, JupyterHub, Jenkins, and StarRocks are deferred and unsupported in this intent. FreeIPA, Hive Metastore, and MIT Kerberos are retired from the target default runtime.\n\n## Resource and role model\n\n| Environment | Catalog | Namespace | Bucket |\n|---|---|---|---|\n| Production | `lakehouse` | `default_lh` | `bucket-default` |\n| Dev | `lakehouse-dev` | `default_lhdev` | `bucket-default-dev` |\n| UAT | `lakehouse-uat` | `default_lhuat` | `bucket-default-uat` |\n\n`role-default-developer` can read all environments and write dev. `role-default-analyst` can read production and cannot write. `role-default-owner` can manage product authorization and data across all environments. `role-default-writer` is the service role for read/write across all environments. Polaris enforces catalog operations; RustFS policies and vended credentials constrain object storage access.\n\n## Startup and bootstrap\n\nThe local runtime starts Keycloak, its PostgreSQL database, Polaris, its PostgreSQL database, and RustFS. `scripts/lakehouse.sh start` creates only missing protected runtime credentials, runs the required Polaris schema initialization, and waits for health. `scripts/bootstrap-default-product.sh` explicitly provisions provider resources and grants, reconciles memberships, verifies writer authentication, and runs Spark smoke-table create/write/read checks. Reruns preserve bucket objects and do not duplicate smoke rows. `scripts/lakehouse.sh stop` preserves named volumes.\n\nAll published host endpoints bind to loopback. Protected credentials remain under `.runtime/credentials/` and must be backed up separately using encrypted storage. No secrets belong in source control, reports, or command output.\n\n## Verification status and known limits\n\nU1 runtime readiness, U2 writer and negative-token checks, U3 RustFS bucket/STS checks, and U4 end-to-end bootstrap and four-role positive/negative Spark access matrix passed on the local `linux/arm64` Docker engine. During a Keycloak outage, new token issuance and group reconciliation fail while already-issued unexpired access tokens may continue until expiry.\n\nClosure was user-approved with a verification waiver. The human PKCE callback browser flow and some reconciliation failure-path diagnostics were not tested. The reconciler currently uses a protected Keycloak bootstrap administrator, which must be replaced by a least-privilege identity before shared deployment. The approved Polaris `require-header=false` setting is specific to the single configured realm and Iceberg 1.8.1 behavior; restore strict realm-header enforcement or fix/upgrade the client before adding realms. This local single-node setup is not a production, HA, or multi-host certification.\n\n## Operational entry points\n\nSee `README.md` for operator commands, backup guidance, and shutdown boundaries. Detailed intent designs and test reports are preserved in the intent archive.\n"
+    }
+  ],
+  "artifacts": [
+    "aidlc-docs/current/inception",
+    "aidlc-docs/current/construction",
+    "aidlc-docs/current/deploy",
+    "aidlc-docs/current/compaction/20261028-keycloak-polaris-catalog-bootstrap/manifest.json",
+    "aidlc-docs/knowledge",
+    "README.md",
+    ".env.example",
+    ".gitignore",
+    "docker-compose.yml",
+    "docker-compose.deferred.yml",
+    "infra",
+    "scripts",
+    ".agents"
+  ],
+  "cleanup_paths": [
+    "aidlc-docs/current/inception",
+    "aidlc-docs/current/construction",
+    "aidlc-docs/current/deploy",
+    "aidlc-docs/current/compaction/20261028-keycloak-polaris-catalog-bootstrap"
+  ]
+}

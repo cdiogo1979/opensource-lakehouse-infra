@@ -1,0 +1,134 @@
+name: lakehouse-local
+
+services:
+  keycloak-db:
+    image: postgres:17.11-alpine3.24@sha256:1bcc18d81671b02906296aad470ec9778a6b71016ce953092024b680bad007b0
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD_FILE: /run/secrets/keycloak_db_password
+    secrets: [keycloak_db_password]
+    volumes:
+      - keycloak-db-data:/var/lib/postgresql/data
+    networks: [core]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U keycloak -d keycloak]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: on-failure:3
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.1@sha256:79c623a22abacf3fe6c00a5fb30f5b7843d717b234033b80995891c06116d244
+    entrypoint: [/opt/lakehouse/keycloak-entrypoint.sh]
+    command: [start]
+    ports:
+      - 127.0.0.1:${KEYCLOAK_HOST_PORT:-8080}:8080
+    volumes:
+      - ./.runtime/container-mounts/keycloak.conf:/opt/keycloak/conf/keycloak.conf:ro
+      - ./.runtime/container-mounts/keycloak-admin-password:/run/secrets/keycloak_admin_password:ro
+      - ./infra/keycloak/keycloak-entrypoint.sh:/opt/lakehouse/keycloak-entrypoint.sh:ro
+    networks: [core]
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, /usr/bin/bash, -c, 'exec 3<>/dev/tcp/127.0.0.1/9000; printf "GET /health/ready HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3; IFS= read -r status <&3; [[ "$$status" == *" 200 "* ]]']
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    restart: on-failure:3
+
+  polaris-db:
+    image: postgres:17.11-alpine3.24@sha256:1bcc18d81671b02906296aad470ec9778a6b71016ce953092024b680bad007b0
+    environment:
+      POSTGRES_DB: polaris
+      POSTGRES_USER: polaris
+      POSTGRES_PASSWORD_FILE: /run/secrets/polaris_db_password
+    secrets: [polaris_db_password]
+    volumes:
+      - polaris-db-data:/var/lib/postgresql/data
+    networks: [core]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U polaris -d polaris]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: on-failure:3
+
+  polaris-schema-init:
+    image: postgres:17.11-alpine3.24@sha256:1bcc18d81671b02906296aad470ec9778a6b71016ce953092024b680bad007b0
+    entrypoint: [/bin/sh, /opt/lakehouse/init-polaris-schema.sh]
+    environment:
+      PGPASSFILE: /run/polaris/pgpass
+    volumes:
+      - ./infra/polaris/init-polaris-schema.sh:/opt/lakehouse/init-polaris-schema.sh:ro
+      - ./.runtime/credentials/polaris-pgpass:/run/polaris/pgpass:ro
+    networks: [core]
+    depends_on:
+      polaris-db:
+        condition: service_healthy
+    profiles: [schema-init]
+    restart: "no"
+
+  polaris:
+    image: apache/polaris:1.8.0@sha256:347615e736cab2c9be0d8c464552ac930be4755302bb0aeb745216bbae99ba5b
+    environment:
+      QUARKUS_CONFIG_LOCATIONS: /deployment/config/application.properties
+    ports:
+      - 127.0.0.1:${POLARIS_HOST_PORT:-8181}:8181
+    volumes:
+      - ./.runtime/container-mounts/polaris-application.properties:/deployment/config/application.properties:ro
+    networks: [core]
+    depends_on:
+      polaris-db:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD-SHELL, 'curl --fail --silent http://127.0.0.1:8182/q/health/ready >/dev/null']
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    restart: on-failure:3
+
+  rustfs:
+    image: rustfs/rustfs:1.0.4
+    command: [/data]
+    environment:
+      RUSTFS_ACCESS_KEY_FILE: /run/secrets/rustfs_access_key
+      RUSTFS_SECRET_KEY_FILE: /run/secrets/rustfs_secret_key
+      RUSTFS_OBS_LOG_STDOUT_ENABLED: "true"
+    ports:
+      - 127.0.0.1:${RUSTFS_S3_HOST_PORT:-9000}:9000
+      - 127.0.0.1:${RUSTFS_CONSOLE_HOST_PORT:-9001}:9001
+    volumes:
+      - ./.runtime/container-mounts/rustfs-access-key:/run/secrets/rustfs_access_key:ro
+      - ./.runtime/container-mounts/rustfs-secret-key:/run/secrets/rustfs_secret_key:ro
+      - rustfs-data:/data
+    networks: [core]
+    healthcheck:
+      test: [CMD, curl, --fail, http://127.0.0.1:9000/health/ready]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: on-failure:3
+
+networks:
+  core:
+    name: lakehouse-local_core
+    driver: bridge
+
+volumes:
+  keycloak-db-data:
+    name: lakehouse-local_keycloak-db-data
+  polaris-db-data:
+    name: lakehouse-local_polaris-db-data
+  rustfs-data:
+    name: lakehouse-local_rustfs-data
+
+secrets:
+  keycloak_db_password:
+    file: ./.runtime/credentials/keycloak-db-password
+  polaris_db_password:
+    file: ./.runtime/credentials/polaris-db-password

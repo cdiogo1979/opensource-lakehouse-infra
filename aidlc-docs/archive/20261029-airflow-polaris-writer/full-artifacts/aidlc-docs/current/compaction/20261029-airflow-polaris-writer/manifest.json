@@ -1,0 +1,85 @@
+{
+  "intent_id": "20261029-airflow-polaris-writer",
+  "name": "Airflow Polaris Writer Identity",
+  "objective": "Enable Airflow production and UAT workloads to use the Polaris writer service identity through a private, renewable token flow while preserving the approved Git Bundle setup.",
+  "date": "2026-10-29",
+  "scope": "Airflow writer-token broker and Compose integration; shared Spark 3.5.5 / Iceberg 1.10.2 token-provider runtime; workload integration on main; preserve lakehouse-main/main and lakehouse-uat/uat. Build/test automation and main production E2E were verified. User confirmed the post-build main and UAT DAGs completed. Concurrency, resilience, and live role-matrix testing remain unverified and outside the approved scope.",
+  "workstreams": [
+    "Airflow writer-token broker and control plane",
+    "Shared Spark token provider and runtime",
+    "Workload DAG and Spark startup integration",
+    "Build, automated test, production verification, and Deploy handoff"
+  ],
+  "verification": {
+    "status": "passed",
+    "details": "Builds, static checks, Compose validation, and automated suites passed; the designated main production run aidlc-writer-verification-20261029T2059Z passed all seven task instances against Bundle version 8dcda2d. The user subsequently reported building the configured image and successfully executing the updated main DAG and UAT DAG; those later run IDs/revisions were not independently retrievable from the active CLI context and are recorded as user-confirmed. Concurrency, resilience, and live role-matrix testing remain unverified and outside the approved verification boundary. No verification waiver is claimed."
+  },
+  "artifact_inventory_complete": true,
+  "summary": {
+    "major_requirements": [
+      "Use the existing write-service-account / role-default-writer identity for Airflow Spark workloads.",
+      "Keep the writer client secret inside the Airflow broker boundary; deliver only short-lived tokens and run-scoped renewal capability to Spark.",
+      "Preserve the two-Bundle contract lakehouse-main/main and lakehouse-uat/uat.",
+      "Keep Jupyter user identity renewal distinct from Airflow writer identity renewal.",
+      "Retain Polaris authorization and Polaris-vended scoped RustFS credentials."
+    ],
+    "design_decisions": [
+      "Use an Airflow-owned private HTTPS broker for per-run writer token acquisition, renewal, and revocation.",
+      "Share the Spark token-provider implementation while selecting separate Jupyter-user and Airflow-writer adapters.",
+      "Use Spark 3.5.5, Java 17, and Iceberg 1.10.2 for the public Iceberg AuthManager API selected in approved Application Design Q5.",
+      "Run the existing main-init_environment workflow with its configured sample-table overwrite."
+    ],
+    "implementation_decisions": [
+      "Published workload changes to opensource-lakehouse main as da070b6 (Align token provider and workload tests).",
+      "Built and tested Airflow, token-broker, and shared Spark runtime images; verified Compose configuration and automated suites.",
+      "Use one ephemeral Spark container per DAG run with cleanup and broker-state revocation."
+    ],
+    "deviations": [
+      "A later retry on da070b6 initially failed at create_cluster because the configured Spark image was absent from Airflow's Docker daemon; the user later reported building the image and successful main and UAT DAG completion.",
+      "The designated successful main E2E run was independently observed against Bundle version 8dcda2d. Later run IDs/revisions were not independently retrievable in the active CLI context and are user-confirmed.",
+      "The active audit was reconstructed from retained state, artifacts, checkpoint, and available transcript excerpts after its working copy was accidentally removed during closure editing; the reconstructed audit explicitly identifies this limitation."
+    ],
+    "superseded_decisions": [
+      "Earlier Unit 2 text named Iceberg 1.8.1; the approved Q5 choice and implemented runtime use Iceberg 1.10.2.",
+      "The sibling repository's separate three-Bundle guide is not the active v2 contract; the approved two-Bundle contract remains unchanged."
+    ]
+  },
+  "canonical_updates": [
+    {
+      "path": "aidlc-docs/knowledge/opensource-lakehouse-infra-v2/application-design.md",
+      "content": "# Application Design — Keycloak, Polaris, and RustFS Bootstrap\n\n## Purpose\n\nThis project provides a local Docker Compose platform-admin journey that bootstraps an initial `default` lakehouse data product without migrating legacy Hive or FreeIPA state. The journey provisions identity groups, storage buckets, Polaris catalogs and namespaces, authorization grants, and Spark smoke tables across production, dev, and UAT.\n\n## Components\n\n- **Keycloak** provides the `lakehouse` OIDC realm, the product role groups, the initial `platform-admin` identity, and the `write-service-account` client.\n- **Apache Polaris** provides Iceberg REST and management APIs, catalogs, namespaces, principal roles, grants, and scoped RustFS credential vending.\n- **PostgreSQL** stores Keycloak and Polaris state in separate databases and named volumes.\n- **RustFS** provides the three S3-compatible environment buckets. Bootstrap creates missing resources and preserves existing objects.\n- **Host scripts** prepare protected credentials, start/check/stop local services, and run the idempotent data-product bootstrap.\n- **Spark** runs on-demand Iceberg workloads using the writer OAuth identity and Polaris-vended S3 credentials.\n\nAirflow is supported for production and UAT workload execution through the v2 Compose control plane. JupyterHub remains a separately supported interactive service with user-bound Spark authentication. Jenkins and StarRocks remain deferred. FreeIPA, Hive Metastore, and MIT Kerberos are retired from the target default runtime.\n\n## Airflow and shared Spark runtime\n\nThe Airflow control plane and writer token broker run in the v2 Compose boundary. For each DAG run, Airflow resolves the selected Git Bundle revision, registers run-scoped broker state, and creates an ephemeral Spark container with the bundle mounted read-only. The writer client secret remains in the broker/Airflow boundary; Spark receives an initial access token and run-scoped renewal capability, never the secret.\n\nThe shared runtime uses Spark 3.5.5, Java 17, and Iceberg 1.10.2. Its JVM `AuthManager` renews access tokens through identity-specific adapters: Airflow uses the run-scoped writer broker, while Jupyter Spark uses the authenticated user's Hub broker. These identities and capabilities are not interchangeable. Polaris remains the authorization and scoped RustFS credential vending point; no RustFS root credential is handed to Spark.\n\nThe active Airflow contract preserves exactly two Git Bundles: `lakehouse-main` tracking `main` and `lakehouse-uat` tracking `uat`. The writer client has a one-hour access-token lifetime override; human JupyterHub token lifetimes remain unchanged.\n\n## Resource and role model\n\n| Environment | Catalog | Namespace | Bucket |\n|---|---|---|---|\n| Production | `lakehouse` | `default_lh` | `bucket-default` |\n| UAT | `lakehouse_uat` | `default_lhuat` | `bucket-default-uat` |\n| Dev | `lakehouse_dev` | `default_lhdev` | `bucket-default-dev` |\n\nEach catalog's default base location is `<bucket>/<catalog>/`; its database namespace contributes the next path segment. Iceberg tables therefore resolve beneath `<bucket>/<catalog>/<database>/<table>` exactly once. For example, the production smoke table is `s3://bucket-default/lakehouse/default_lh/bootstrap_smoke_test/`.\n\n`role-default-developer` can read all environments and write dev. `role-default-analyst` can read production and cannot write. `role-default-owner` can manage product authorization and data across all environments. `role-default-writer` is the service role for read/write across all environments. Polaris enforces catalog operations; RustFS policies and vended credentials constrain object storage access.\n\n## Startup and bootstrap\n\nThe local runtime starts Keycloak, its PostgreSQL database, Polaris, its PostgreSQL database, and RustFS. `scripts/lakehouse.sh start` creates only missing protected runtime credentials, runs the required Polaris schema initialization, and waits for health. `scripts/bootstrap-default-product.sh` explicitly provisions provider resources and grants, reconciles memberships, verifies writer authentication, and runs Spark smoke-table create/write/read checks. Reruns preserve bucket objects and do not duplicate smoke rows. `scripts/lakehouse.sh stop` preserves named volumes.\n\nAll published host endpoints bind to loopback. Protected credentials remain under `.runtime/credentials/` and must be backed up separately using encrypted storage. No secrets belong in source control, reports, or command output.\n\n## Verification status and known limits\n\nU1 runtime readiness, U2 writer and negative-token checks, U3 RustFS bucket/STS checks, and U4 end-to-end bootstrap and four-role positive/negative Spark access matrix passed on the local `linux/arm64` Docker engine. For the Airflow writer-token intent, builds, static checks, and automated suites passed; the designated main E2E run passed. The user subsequently reported building the shared image and successful main and UAT DAG runs. Those later run IDs/revisions were not independently retrievable in that session and are recorded as user-confirmed. During a Keycloak outage, new token issuance and group reconciliation fail while already-issued unexpired access tokens may continue until expiry.\n\nThe prior bootstrap intent's closure was user-approved with a verification waiver. For that intent, the human PKCE callback browser flow and some reconciliation failure-path diagnostics were not tested. The reconciler currently uses a protected Keycloak bootstrap administrator, which must be replaced by a least-privilege identity before shared deployment. The approved Polaris `require-header=false` setting was specific to the single configured realm and earlier Iceberg 1.8.1 behavior; reassess strict realm-header enforcement before adding realms. For the Airflow intent, concurrent workload, resilience, and live role-matrix checks remain unverified and outside the approved verification boundary. This local single-node setup is not a production, HA, or multi-host certification.\n\n## Operational entry points\n\nSee `README.md` for operator commands, the guarded one-time local storage reset, backup guidance, and shutdown boundaries. Detailed intent designs and test reports are preserved in the intent archive.\n"
+    },
+    {
+      "path": "aidlc-docs/knowledge/opensource-lakehouse/application-design.md",
+      "content": "# Workload Repository Airflow Integration\n\nThe `opensource-lakehouse` repository supplies DAGs, configuration, and workload entrypoints consumed by the v2 Airflow Git Bundles. The active deployment contract is `lakehouse-main` tracking `main` and `lakehouse-uat` tracking `uat`; do not replace it with a different Bundle layout without an approved scope change.\n\nAirflow creates an ephemeral Spark container per DAG run and mounts the selected Bundle checkout read-only. Workload Spark startup selects the Airflow adapter in the shared Spark 3.5.5 / Iceberg 1.10.2 runtime. It uses a short-lived access token and run-scoped broker capability to authenticate to Polaris as the existing `write-service-account` / `role-default-writer` identity. The writer secret remains in the broker/Airflow boundary. Polaris continues to vend scoped RustFS credentials.\n\nJupyter Spark shares the provider implementation but selects a separate user-bound Hub broker adapter; Airflow and Jupyter identities and capabilities are not interchangeable. The writer service changes were pushed to `main` as `da070b6`.\n\nThe designated production workflow is `main-init_environment`, with its configured sample-table overwrite. Build/test suites and the designated main run passed. The user subsequently reported successful main and UAT DAG execution after building the image; these later runs are user-confirmed but their run IDs/revisions were not independently available in the active CLI session. Concurrent workloads, resilience, and live role-matrix checks remain unverified.\n\nDetailed intent history: `aidlc-docs/archive/20261029-airflow-polaris-writer/`.\n"
+    },
+    {
+      "path": "aidlc-docs/knowledge/opensource-lakehouse/functional-design/airflow-workload-execution.md",
+      "content": "# Airflow Workload Execution and Writer Identity\n\n## Execution contract\n\n1. Airflow resolves a run against the pinned checkout from the approved production or UAT Git Bundle.\n2. The Airflow broker acquires the writer service token and associates it with a unique DAG run. It keeps the Keycloak writer secret and issues a high-entropy, run-scoped renewal capability.\n3. Airflow starts one ephemeral Spark container for that run, mounting the selected workload bundle read-only and passing only the initial access token, broker endpoint/CA, run handle, and renewal capability.\n4. The shared Iceberg `AuthManager` uses the Airflow adapter to renew the bearer token through authenticated TLS before Iceberg REST requests. The broker owns token acquisition; Spark never receives the writer secret.\n5. Spark sends the current token to Polaris for catalog operations. Polaris enforces its existing writer role and vends scoped RustFS credentials for storage access.\n6. Airflow stops/removes the Spark container and revokes broker run state on completion/failure. Broker state has bounded expiry as a fallback.\n\n## Identity and configuration rules\n\n- Writer identity: Keycloak `write-service-account`, mapped to Polaris `role-default-writer`.\n- Shared runtime: Spark 3.5.5, Java 17, Iceberg 1.10.2.\n- Production Bundle: `lakehouse-main` / `main`; UAT Bundle: `lakehouse-uat` / `uat`.\n- The Jupyter adapter remains user-bound and separate from the Airflow writer adapter.\n- Never pass writer client secrets to Spark or log tokens, capabilities, authorization headers, or sensitive broker responses.\n- Do not broaden Polaris grants or replace Polaris-vended storage credentials with RustFS root keys.\n\n## Failure behavior and verification record\n\nBroker registration or renewal failures fail the task/job; there is no fallback identity. Container startup failure triggers cleanup and broker revocation, with bounded capability expiry as a fallback. The DAG's cleanup path runs regardless of workload outcome.\n\nBuilds, automated checks, and the designated main production E2E passed. The user later confirmed the image build and successful main and UAT DAG runs; run IDs/revisions could not be retrieved from the active CLI session. Concurrency, resilience, and live role-matrix checks remain unverified and were outside the approved intent scope.\n"
+    }
+  ],
+  "artifacts": [
+    "aidlc-docs/current/inception",
+    "aidlc-docs/current/construction",
+    "aidlc-docs/current/deploy",
+    "aidlc-docs/current/compaction/20261029-airflow-polaris-writer/manifest.json",
+    "aidlc-docs/current/aidlc-state.md",
+    "aidlc-docs/current/audit.md",
+    "docker-compose.airflow.yml",
+    "infra/airflow",
+    "infra/spark-runtime",
+    "infra/spark-token-provider",
+    "infra/jupyter/singleuser",
+    "scripts/lakehouse.sh",
+    "scripts/verify-airflow-environment-dags.sh",
+    "aidlc-docs/knowledge/opensource-lakehouse-infra-v2/application-design.md",
+    "aidlc-docs/knowledge/opensource-lakehouse/application-design.md",
+    "aidlc-docs/knowledge/opensource-lakehouse/functional-design/airflow-workload-execution.md"
+  ],
+  "cleanup_paths": [
+    "aidlc-docs/current/inception",
+    "aidlc-docs/current/construction",
+    "aidlc-docs/current/deploy",
+    "aidlc-docs/current/compaction/20261029-airflow-polaris-writer"
+  ]
+}

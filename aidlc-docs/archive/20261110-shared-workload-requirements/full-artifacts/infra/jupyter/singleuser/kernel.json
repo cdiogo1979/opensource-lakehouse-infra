@@ -1,0 +1,10 @@
+{
+  "argv": ["/opt/lakehouse/venv/bin/python", "-Xfrozen_modules=off", "-m", "ipykernel_launcher", "-f", "{connection_file}"],
+  "display_name": "Lakehouse (Python 3.10)",
+  "language": "python",
+  "env": {
+    "PYSPARK_PYTHON": "/opt/lakehouse/venv/bin/python",
+    "PYSPARK_DRIVER_PYTHON": "/opt/lakehouse/venv/bin/python"
+  },
+  "metadata": {"debugger": true}
+}

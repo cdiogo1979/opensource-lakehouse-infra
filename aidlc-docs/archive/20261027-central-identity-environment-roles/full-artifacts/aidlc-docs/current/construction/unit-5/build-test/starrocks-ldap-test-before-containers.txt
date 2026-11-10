@@ -1,0 +1,47 @@
+hive-dremio-rustfs-airflow-api-server-1 3f2bac6bb00a Up 36 hours (healthy)
+hive-dremio-rustfs-airflow-dag-processor-1 local/lakehouse-airflow:3.3.2 Up 35 hours
+hive-dremio-rustfs-airflow-init-1 3f2bac6bb00a Exited (0) 36 hours ago
+hive-dremio-rustfs-airflow-postgres-1 postgres:16.14 Up 36 hours (healthy)
+hive-dremio-rustfs-airflow-scheduler-1 local/lakehouse-airflow:3.3.2 Up 35 hours
+hive-dremio-rustfs-airflow-triggerer-1 3f2bac6bb00a Up 36 hours
+hive-dremio-rustfs-jenkins-1 local/lakehouse-jenkins-validation:1.0.0 Up 23 hours (healthy)
+iceberg-poc-create-bucket hive-dremio-rustfs-create-bucket Exited (0) 34 hours ago
+iceberg-poc-freeipa-validation local/freeipa-server:4.13.4-almalinux-9-nssfix Up 15 hours (healthy)
+iceberg-poc-hive-metastore local/hive-metastore:3.1.3-native-pgjdbc42.7.14 Up 3 days (healthy)
+iceberg-poc-hive-schema-init local/hive-metastore:3.1.3-native-pgjdbc42.7.14 Exited (0) 34 hours ago
+iceberg-poc-jupyterhub local/iceberg-jupyterhub:5.3.0 Up 10 hours
+iceberg-poc-kdc hive-dremio-rustfs-kdc Up 3 days (healthy)
+iceberg-poc-metastore-db postgres:16.14 Up 3 days (healthy)
+iceberg-poc-object-store rustfs/rustfs:1.0.0-glibc Up 3 days (healthy)
+iceberg-poc-spark local/spark-iceberg:3.5.5_1.8.1-krb5 Up 35 hours (healthy)
+iceberg-poc-starrocks-be local/starrocks-be:4.1.6-kerberos Up 2 days (healthy)
+iceberg-poc-starrocks-fe local/starrocks-fe:4.1.6-kerberos Up 2 days (healthy)
+iceberg-poc-starrocks-preflight hive-dremio-rustfs-starrocks-preflight Exited (0) 2 days ago
+k8s_POD_coredns-54996dc9b4-dg6lq_kube-system_1243832e-e455-4809-8832-e9b0ae272a61_11 rancher/mirrored-pause:3.10.2 Exited (255) 6 days ago
+k8s_POD_coredns-54996dc9b4-dg6lq_kube-system_1243832e-e455-4809-8832-e9b0ae272a61_12 rancher/mirrored-pause:3.10.2 Up 6 days
+k8s_POD_helm-install-traefik-66jjv_kube-system_516586ea-3919-4022-9e7e-338fbcd218ec_2 rancher/mirrored-pause:3.10.2 Exited (0) 4 weeks ago
+k8s_POD_helm-install-traefik-crd-vpd2l_kube-system_8fbc3aae-8a0b-4fbe-bf15-eecaeae12d7e_0 rancher/mirrored-pause:3.10.2 Exited (0) 4 weeks ago
+k8s_POD_local-path-provisioner-77b9867795-t6pfq_kube-system_ffa2dd99-bdde-4008-a8f2-e028e572db04_11 rancher/mirrored-pause:3.10.2 Exited (255) 6 days ago
+k8s_POD_local-path-provisioner-77b9867795-t6pfq_kube-system_ffa2dd99-bdde-4008-a8f2-e028e572db04_12 rancher/mirrored-pause:3.10.2 Up 6 days
+k8s_POD_metrics-server-6dc596dfb8-7654f_kube-system_b3ccd817-d922-4c23-a529-533186b4fedc_11 rancher/mirrored-pause:3.10.2 Exited (255) 6 days ago
+k8s_POD_metrics-server-6dc596dfb8-7654f_kube-system_b3ccd817-d922-4c23-a529-533186b4fedc_12 rancher/mirrored-pause:3.10.2 Up 6 days
+k8s_POD_svclb-traefik-569ddaa2-6qk69_kube-system_5e0047f3-7142-43dc-9781-ef08cb2d977f_8 rancher/mirrored-pause:3.10.2 Exited (255) 6 days ago
+k8s_POD_svclb-traefik-569ddaa2-6qk69_kube-system_5e0047f3-7142-43dc-9781-ef08cb2d977f_9 rancher/mirrored-pause:3.10.2 Up 6 days
+k8s_POD_traefik-59b7647586-7clhj_kube-system_a93c7200-faee-45e6-aa32-3690e0ed97ff_8 rancher/mirrored-pause:3.10.2 Exited (255) 6 days ago
+k8s_POD_traefik-59b7647586-7clhj_kube-system_a93c7200-faee-45e6-aa32-3690e0ed97ff_9 rancher/mirrored-pause:3.10.2 Up 6 days
+k8s_coredns_coredns-54996dc9b4-dg6lq_kube-system_1243832e-e455-4809-8832-e9b0ae272a61_10 900f9c109f7a Up 6 days
+k8s_coredns_coredns-54996dc9b4-dg6lq_kube-system_1243832e-e455-4809-8832-e9b0ae272a61_9 900f9c109f7a Exited (255) 6 days ago
+k8s_helm_helm-install-traefik-66jjv_kube-system_516586ea-3919-4022-9e7e-338fbcd218ec_1 5425a2b4613d Exited (0) 4 weeks ago
+k8s_helm_helm-install-traefik-crd-vpd2l_kube-system_8fbc3aae-8a0b-4fbe-bf15-eecaeae12d7e_0 5425a2b4613d Exited (0) 4 weeks ago
+k8s_lb-tcp-443_svclb-traefik-569ddaa2-6qk69_kube-system_5e0047f3-7142-43dc-9781-ef08cb2d977f_7 910944bb0bd9 Exited (255) 6 days ago
+k8s_lb-tcp-443_svclb-traefik-569ddaa2-6qk69_kube-system_5e0047f3-7142-43dc-9781-ef08cb2d977f_8 910944bb0bd9 Up 6 days
+k8s_lb-tcp-80_svclb-traefik-569ddaa2-6qk69_kube-system_5e0047f3-7142-43dc-9781-ef08cb2d977f_7 910944bb0bd9 Exited (255) 6 days ago
+k8s_lb-tcp-80_svclb-traefik-569ddaa2-6qk69_kube-system_5e0047f3-7142-43dc-9781-ef08cb2d977f_8 910944bb0bd9 Up 6 days
+k8s_local-path-provisioner_local-path-provisioner-77b9867795-t6pfq_kube-system_ffa2dd99-bdde-4008-a8f2-e028e572db04_10 e757967a5ec3 Exited (255) 6 days ago
+k8s_local-path-provisioner_local-path-provisioner-77b9867795-t6pfq_kube-system_ffa2dd99-bdde-4008-a8f2-e028e572db04_11 e757967a5ec3 Up 6 days
+k8s_metrics-server_metrics-server-6dc596dfb8-7654f_kube-system_b3ccd817-d922-4c23-a529-533186b4fedc_13 d9862115e7c7 Exited (255) 6 days ago
+k8s_metrics-server_metrics-server-6dc596dfb8-7654f_kube-system_b3ccd817-d922-4c23-a529-533186b4fedc_14 d9862115e7c7 Up 6 days
+k8s_traefik_traefik-59b7647586-7clhj_kube-system_a93c7200-faee-45e6-aa32-3690e0ed97ff_8 4299bbed8504 Exited (255) 6 days ago
+k8s_traefik_traefik-59b7647586-7clhj_kube-system_a93c7200-faee-45e6-aa32-3690e0ed97ff_9 4299bbed8504 Up 6 days
+opensource-lakehouse-infra-identity-reconciler-1 5ed917072f91 Created
+ranger-test-ipa local/ranger-test-freeipa:4.13.4 Up 2 hours (healthy)

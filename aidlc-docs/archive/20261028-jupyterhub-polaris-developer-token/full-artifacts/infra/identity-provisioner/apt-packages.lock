@@ -1,0 +1,5 @@
+krb5-user=1.20.1-2+deb12u5
+postgresql-client=15+248+deb12u1
+python3=3.11.2-1+b1
+python3-botocore=1.29.27+repack-1
+python3-ldap=3.4.3-2+deb12u1

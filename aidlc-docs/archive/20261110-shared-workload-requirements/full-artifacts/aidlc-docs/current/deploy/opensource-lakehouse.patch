@@ -1,0 +1,551 @@
+From 8ef716f92c4e85e2a66e429366483dc6c9f93b61 Mon Sep 17 00:00:00 2001
+From: cdiogo1979 <cdiogo@gmail.com>
+Date: Tue, 10 Nov 2026 14:15:11 +0000
+Subject: [PATCH 1/2] Add requirements.txt extras and the generate_tpch
+ workflow
+
+The platform now runs workload code on one shared Python 3.10 environment
+in Airflow and Jupyter. This repository declares its extras in
+requirements.txt (duckdb==1.5.6), installed at each run, constrained by
+the platform lock.
+
+generate_tpch.py generates TPC-H data with DuckDB and checks one entity's
+row count; workflows/generate_tpch.json runs it for all eight entities.
+CI installs requirements.txt with the platform lock as constraint. The
+README and AGENTS.md describe packages, the Jupyter kernel and command.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ AGENTS.md                                     |   7 +-
+ Jenkinsfile                                   |   5 +
+ README.md                                     |  72 ++++++--
+ notebooks/workload/generate_tpch.py           | 159 ++++++++++++++++++
+ requirements.txt                              |   5 +
+ .../workload_foundation/test_generate_tpch.py |  85 ++++++++++
+ workflows/generate_tpch.json                  |  17 ++
+ 7 files changed, 337 insertions(+), 13 deletions(-)
+ create mode 100644 notebooks/workload/generate_tpch.py
+ create mode 100644 requirements.txt
+ create mode 100644 tests/workload_foundation/test_generate_tpch.py
+ create mode 100644 workflows/generate_tpch.json
+
+diff --git a/AGENTS.md b/AGENTS.md
+index bba2c58..a3d7528 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -8,6 +8,7 @@ This is a lakehouse **data product repository**. [README.md](README.md) is the c
+ - `notebooks/common/`: shared helpers (`config_loader.py`, `cli.py`, `job_runtime.py`), used by Airflow runs and Jupyter.
+ - `configs/<env>.yml` and optional `configs/<product>/<env>.yml`: non-secret settings for `prod`, `uat`, `dev`.
+ - `dags/lakehouse.py`: the platform stub. **Never edit it, and never add files to `dags/`.**
++- `requirements.txt`: optional extra Python packages for the workload code, installed by the platform at each Airflow run and with `lakehouse-install-requirements` in Jupyter.
+ - `tests/`, `scripts/code_quality.sh`, `Jenkinsfile`, `requirements-dev.txt`.
+ 
+ ## Rules
+@@ -20,7 +21,11 @@ This is a lakehouse **data product repository**. [README.md](README.md) is the c
+   - the loader accepts only `dev`, `uat` and `prod`, requires `storage_path` and `database_name`, and never falls back across environments;
+   - values must be the product's own namespaces and buckets;
+   - no credentials, tokens, or endpoints anywhere in the repository.
+-- **Dependencies**: Airflow, Spark and provider versions belong to the platform; don't pin or install them here. Entry points can use only what the platform's Spark image provides. Test tools go in `requirements-dev.txt`.
++- **Dependencies**:
++  - Airflow, Spark, PySpark and Python versions belong to the platform; don't pin or install them here.
++  - Entry points run on the platform's Python 3.10 set (PyYAML, requests, pandas, numpy, pyarrow, ...) plus `requirements.txt`.
++  - `requirements.txt` holds only plain, pinned requirements (`name==version`): no pip options, URLs, paths, or `pyspark`/`py4j`/`pip`/`setuptools`/`wheel`. Every package must have a CPython 3.10 Linux aarch64 wheel for glibc 2.31 or older, and must not need a different version of a platform package. CI (`lakehouse-validate-workflows .`) checks this.
++  - Test tools go in `requirements-dev.txt`.
+ - **Python style**: Google-style docstrings on new functions, Black and Ruff with line length 200, Flake8 and Bandit clean (`scripts/code_quality.sh all`).
+ - **Keep the docs current**: update `README.md`, and this file if a rule changes, whenever the layout or a contract changes.
+ - **AI-DLC work**: follow `.agents/skills/aidlc-workflows/SKILL.md`; artifacts live in `aidlc-docs/`.
+diff --git a/Jenkinsfile b/Jenkinsfile
+index 998cd31..15e2c1e 100644
+--- a/Jenkinsfile
++++ b/Jenkinsfile
+@@ -7,6 +7,11 @@ pipeline {
+                 sh '''
+                     python3 -m venv .venv
+                     .venv/bin/python -m pip install --disable-pip-version-check -r requirements-dev.txt
++                    # The repository's extras, constrained by the platform lock (mounted by the platform Jenkins).
++                    if [ -f requirements.txt ]; then
++                        .venv/bin/python -m pip install --disable-pip-version-check --only-binary=:all: \
++                            -r requirements.txt --constraint /opt/lakehouse/workload-python/requirements.lock
++                    fi
+                 '''
+             }
+         }
+diff --git a/README.md b/README.md
+index 7edd343..932fa90 100644
+--- a/README.md
++++ b/README.md
+@@ -13,11 +13,12 @@ The same code runs in two places:
+ 4. [Workflow JSON reference](#workflow-json-reference)
+ 5. [The DAG stub](#the-dag-stub)
+ 6. [Writing an entry point](#writing-an-entry-point)
+-7. [Configs and environments](#configs-and-environments)
+-8. [Working in Jupyter](#working-in-jupyter)
+-9. [CI in Jenkins](#ci-in-jenkins)
+-10. [How-to](#how-to)
+-11. [Limits](#limits)
++7. [Python packages](#python-packages)
++8. [Configs and environments](#configs-and-environments)
++9. [Working in Jupyter](#working-in-jupyter)
++10. [CI in Jenkins](#ci-in-jenkins)
++11. [How-to](#how-to)
++12. [Limits](#limits)
+ 
+ ## What lives where
+ 
+@@ -28,6 +29,7 @@ The same code runs in two places:
+ | `notebooks/common/`: config loading, argument parsing, Spark session start-up | Issuing the product's short-lived write token to each run, through the token broker |
+ | `configs/`: non-secret settings per environment (storage path, catalog, database) | The Git bundles that Airflow reads from this repository (`<product>-main`, `<product>-uat`) |
+ | `dags/lakehouse.py`: a fixed two-line stub | The Jenkins jobs that check this repository, and the workflow validator they use |
++| `requirements.txt` (optional): extra Python packages for this repository's code | The shared Python 3.10 environment (pandas, numpy, pyarrow, PyYAML, requests, ...) and the lock that pins it, the same in Airflow and Jupyter |
+ 
+ Nothing in this repository holds a password, key, or token, and nothing should.
+ 
+@@ -37,15 +39,16 @@ Nothing in this repository holds a password, key, or token, and nothing should.
+    - `<product>-main` tracks the production branch (`main` for `default`) and runs in environment `prod`;
+    - `<product>-uat` tracks the UAT branch (`uat`) and runs in environment `uat`.
+ 
+-   Each bundle checks out `dags/`, `workflows/`, `notebooks/` and `configs/`, and refreshes about every 5 minutes.
++   Each bundle checks out `dags/`, `workflows/`, `notebooks/`, `configs/` and the files at the repository root (such as `requirements.txt`), and refreshes about every 5 minutes.
+ 2. **DAGs**: Airflow parses `dags/lakehouse.py`, which asks the platform to build one DAG per `workflows/<name>.json`. The DAG ID is `<bundle>-<name>`, for example `default-uat-test_environment`. The platform's token broker relies on that prefix to pick the product's writer, so DAG IDs are never chosen in this repository.
+ 3. **Each DAG has the same fixed shape**:
+ 
+    ```text
+-   create_cluster ─▶ validate_environment ─▶ submit_<task> … (in runs_after order) ─▶ stop_cluster ─▶ verify_workloads_succeeded
++   create_cluster ─▶ install_requirements ─▶ validate_environment ─▶ submit_<task> … (in runs_after order) ─▶ stop_cluster ─▶ verify_workloads_succeeded
+    ```
+ 
+    - `create_cluster` registers the run with the token broker and starts one Spark container. The container mounts the run's exact bundle commit at `/opt/lakehouse-bundle`, read-only.
++   - `install_requirements` installs this repository's `requirements.txt` into the container, constrained by the platform's lock (see [Python packages](#python-packages)). Without a `requirements.txt` it does nothing. It retries twice, 30 seconds apart; if it still fails, no task runs.
+    - `validate_environment` loads the environment's config inside that container with this repository's own `notebooks/common/config_loader.py`.
+    - Each `submit_<task>` runs one entry point with `spark-submit --master local[*]` as its own Spark application. Tasks without `runs_after` start together; the others wait for their predecessors.
+    - `stop_cluster` always runs, even after failures. It removes the container and revokes the run's token.
+@@ -57,7 +60,8 @@ Nothing in this repository holds a password, key, or token, and nothing should.
+ 
+ ```text
+ workflows/                 One JSON file per Airflow DAG (see the reference below)
+-  test_environment.json
++  test_environment.json      the smoke table: create twice, then count
++  generate_tpch.json         TPC-H generation and row-count checks, one task per entity
+ dags/
+   lakehouse.py             The platform stub: the only file allowed in dags/
+ notebooks/
+@@ -68,11 +72,13 @@ notebooks/
+   workload/                Spark jobs (Jupytext py:percent files, also notebooks)
+     test_environment.py      creates the smoke table
+     count_sample_rows.py     counts its rows
++    generate_tpch.py         generates TPC-H data with DuckDB and checks one entity's row count
+     jupyter_helper.py        Jupyter start-up (dev settings)
+ configs/                   Non-secret settings: dev.yml, uat.yml, prod.yml, optional <product>/<env>.yml
+ tests/                     pytest and Hypothesis tests for the helpers and workloads
+ scripts/code_quality.sh    lint, flake8, bandit (used by CI)
+ Jenkinsfile                CI checks (no deployment)
++requirements.txt           Extra Python packages for the workload code (duckdb), on top of the platform's set
+ requirements-dev.txt       Test and lint tools
+ AGENTS.md                  Rules for coding agents working here
+ ```
+@@ -170,7 +176,29 @@ extra = task_args()                             # the workflow task's "args"; []
+ - **Arguments**: `cli.parse_args()` returns the same values plus `task_args`, and `cli.task_args()` returns only the arguments after the first `--`, unchanged. Arguments are passed as a list and never go through a shell.
+ - **Environment variables** set in the Airflow container: `LAKEHOUSE_ENVIRONMENT` (`prod` or `uat`), `LAKEHOUSE_PRODUCT` (for example `default`), and `PYTHONPATH=/opt/lakehouse-bundle`, so `notebooks.common` imports work.
+ - **Stop Spark at the end**: call `spark.stop()` in a `finally:` block. Put the run code under `if __name__ == "__main__":` so tests and notebooks can import the file without starting Spark.
+-- **Packages**: entry points run on the platform's Spark runtime image (Spark 3.5.5, Iceberg 1.10.2, Python 3.10, with PyYAML, pandas, numpy and pyarrow), and nothing else is installed. A shared requirements file for Airflow and Jupyter is planned by the platform.
++- **Packages**: entry points run on the platform's Python 3.10 environment plus this repository's `requirements.txt`; see [Python packages](#python-packages).
++
++## Python packages
++
++Workload code runs on one Python environment, the same in Airflow's Spark containers and in the Jupyter kernel: **Python 3.10** with the platform's pinned packages, and PySpark 3.5.5 from the Spark installation.
++
++- **The platform's packages**: PyYAML, requests, pandas, numpy, pyarrow, ipykernel and jupytext, with their dependencies, at versions fixed by the platform's lock (`infra/workload-python/requirements.lock` in the platform repository). Other packages are not available unless this repository asks for them.
++- **This repository's extras**: list them in `requirements.txt` at the repository root, one plain requirement per line, for example:
++
++  ```text
++  duckdb==1.5.6  # generate_tpch.py: TPC-H data generation
++  ```
++
++  - **Pin them** (`==`), so every run gets the same version.
++  - **The platform's versions win**: the lock is always applied as a constraint. A requirement that needs a different version of a locked package (for example `pandas==2.2.2`, or `numpy>=2`) fails, in CI and in the run. Listing a locked package at its locked version is allowed and changes nothing.
++  - **Allowed lines**: package names with optional extras (`requests[socks]`), version specifiers (`==`, `>=`, `<`, `~=`, ...), environment markers, and comments.
++  - **Refused lines**: pip options (`-r`, `-e`, `-c`, `--index-url`, `--extra-index-url`, `--hash`, ...), URLs, paths and `name @ url` references, and `pyspark`, `py4j`, `pip`, `setuptools`, `wheel` (the platform provides them).
++  - **Prebuilt wheels only**: every package, dependencies included, needs a wheel for CPython 3.10 on Linux **aarch64** with glibc 2.31 or older (`manylinux_2_17` to `manylinux_2_31`, or `manylinux2014`). Nothing is compiled. For example, `pytpch` 0.2.0 ships only an x86_64 wheel for glibc 2.34, so it can't be used here; DuckDB's built-in TPC-H generator replaces it.
++- **When they are installed**:
++  - **Airflow**: by `install_requirements` at the start of every run, into that run's container only, from public PyPI. A run of a repository without `requirements.txt` needs no network for this. With extras, the install time is part of the run (a few seconds for `duckdb`).
++  - **Jupyter**: when you run `lakehouse-install-requirements` (see [Working in Jupyter](#working-in-jupyter)).
++  - **CI**: `lakehouse-validate-workflows` checks the file against the lock for the platform's architecture, and the test stage installs it so the unit tests can use it.
++- **DuckDB's TPC-H extension**: `generate_tpch.py` uses DuckDB's `tpch` extension, which DuckDB downloads from `extensions.duckdb.org` the first time it is used in a container (each run, and once per Jupyter home).
+ 
+ ## Configs and environments
+ 
+@@ -194,6 +222,19 @@ extra = task_args()                             # the workflow task's "args"; []
+ 2. Clone this repository into your workspace and open a file from `notebooks/workload/` as a notebook. Jupytext reads the `py:percent` format.
+ 3. Run the cells. `# %run ./jupyter_helper.py` finds the repository root, selects `dev`, and starts Spark with **your own** identity, so you see and write only what your groups allow (for a developer, read in `prod` and `uat`, write in `dev`).
+ 
++**The kernel**: the only kernel is **Lakehouse (Python 3.10)**, with the same packages as Airflow runs. Notebooks saved with an older kernel open with it.
++
++**This repository's extras** (`requirements.txt`): open a terminal in JupyterLab (or use `!` in a cell), then restart the kernel:
++
++```bash
++cd ~/work/opensource-lakehouse        # your clone
++lakehouse-install-requirements        # or: lakehouse-install-requirements path/to/clone
++```
++
++The packages go to `~/.local/lakehouse/python3.10` in your home, which survives server restarts. Running the command for another repository adds its packages too. When the platform's lock changes, the command asks you to rerun it with `--reset`, which empties that folder first.
++
++**TPC-H in a notebook**: open `notebooks/workload/generate_tpch.py`, set `ENTITY` and `SCALE_FACTOR`, and run all cells.
++
+ `workflows/` and `dags/` play no part in Jupyter. An entry point that works in Jupyter with `dev` should behave the same in Airflow with `uat` and `prod`, apart from data and permissions.
+ 
+ ## CI in Jenkins
+@@ -206,9 +247,9 @@ The platform creates a folder named after the product in Jenkins (<http://127.0.
+ | `<product>_cd` | every branch of this repository with an open pull request (not forks) | every 30 minutes |
+ 
+ The pipeline stages are:
+-1. install the test dependencies;
++1. install the test dependencies, and `requirements.txt` constrained by the platform's lock;
+ 2. compile `dags` and `notebooks`;
+-3. **validate workflows** (`lakehouse-validate-workflows .`): the platform's own rules for `workflows/*.json`, the exact stub, and nothing else in `dags/`;
++3. **validate workflows** (`lakehouse-validate-workflows .`): the platform's own rules for `workflows/*.json`, the exact stub, and nothing else in `dags/`, then `requirements.txt` against the platform's lock (it lists the packages it would add);
+ 4. Ruff and Black, Flake8, and Bandit, in parallel;
+ 5. pytest.
+ 
+@@ -225,6 +266,12 @@ CI doesn't deploy anything: Airflow picks up merged changes from Git by itself.
+ 
+ **Add a task with arguments and retries**: add an entry to `tasks` with `args`, `retries` and, optionally, `retry_delay_seconds`. Read the arguments with `task_args()`.
+ 
++**Add a Python package**:
++1. Add `<package>==<version>` to `requirements.txt`, and check that the package has a Linux aarch64 wheel for CPython 3.10 (on PyPI, the file list of that version).
++2. In Jupyter, run `lakehouse-install-requirements`, restart the kernel, and try your code with `dev`.
++3. Open a pull request. CI refuses the change if the package conflicts with the platform's versions or has no suitable wheel.
++4. If the package belongs in every product's environment, ask the platform team to add it to the platform's set instead.
++
+ **Run a dependency**: list the earlier task's name in `runs_after`. Tasks with no dependencies start in parallel after the config check.
+ 
+ **Check locally before pushing**:
+@@ -247,4 +294,5 @@ The workflow validator runs in Jenkins. With a copy of the platform's `lakehouse
+ - **Fixed environments**: Airflow runs only `prod` (from the production branch) and `uat` (from the UAT branch). `dev` is for Jupyter, and feature branches are tested in CI, not in Airflow.
+ - **Public repository only**: the platform reads it anonymously.
+ - **Scans, not webhooks**: Jenkins checks for changes every 5 or 30 minutes, and Airflow refreshes bundles about every 5 minutes. Pull requests from forks aren't built.
+-- **Fixed packages**: entry points can use only the packages in the platform's Spark image.
++- **Packages from public PyPI, prebuilt aarch64 wheels only**: no private index, no source builds, and no cache: each Airflow run with a `requirements.txt` installs it again.
++- **The platform's versions are fixed for a repository**: to change a locked package's version, the platform's lock has to change.
+diff --git a/notebooks/workload/generate_tpch.py b/notebooks/workload/generate_tpch.py
+new file mode 100644
+index 0000000..7e9828b
+--- /dev/null
++++ b/notebooks/workload/generate_tpch.py
+@@ -0,0 +1,159 @@
++# %% [markdown]
++# # Generate TPC-H data and count one entity
++#
++# This Jupytext `py:percent` notebook generates the TPC-H dataset in memory with
++# DuckDB (the `duckdb` package from this repository's `requirements.txt`), counts
++# the rows of one TPC-H entity, and checks the count against the TPC-H rules. It
++# starts no Spark session and writes nothing.
++#
++# In Airflow, `workflows/generate_tpch.json` runs it once per entity with
++# `--entity <name>` after `--`; `--scale-factor` is optional (default 0.01).
++# In Jupyter, run `lakehouse-install-requirements` once, restart the kernel, and
++# set `ENTITY` and `SCALE_FACTOR` below. DuckDB downloads its `tpch` extension
++# the first time it is used, so the first run needs network access.
++
++# %%
++import argparse
++import logging
++import sys
++from decimal import Decimal, InvalidOperation
++
++logging.basicConfig(
++    level=logging.INFO,
++    format="%(asctime)s %(levelname)s %(name)s - %(message)s",
++)
++logger = logging.getLogger(__name__)
++
++# %% [markdown]
++# ## Settings for Jupyter
++#
++# Airflow passes these as task arguments instead.
++
++# %%
++ENTITY = "lineitem"
++SCALE_FACTOR = "0.01"
++
++# %% [markdown]
++# ## TPC-H rules
++#
++# `region` and `nation` have fixed sizes. The other entities, except `lineitem`,
++# have exactly their base count times the scale factor. Each order has 1 to 7
++# lines, so `lineitem` is checked against the `orders` count. Scale factors are
++# kept small (0.001 to 1, at most three decimal places) so every count is whole.
++
++# %%
++ENTITIES = ("region", "nation", "supplier", "customer", "part", "partsupp", "orders", "lineitem")
++FIXED_COUNTS = {"region": 5, "nation": 25}
++BASE_COUNTS = {"supplier": 10_000, "customer": 150_000, "part": 200_000, "partsupp": 800_000, "orders": 1_500_000}
++LINES_PER_ORDER = (1, 7)
++SCALE_STEP = Decimal("0.001")
++MIN_SCALE_FACTOR = Decimal("0.001")
++MAX_SCALE_FACTOR = Decimal("1")
++
++
++def parse_scale_factor(text: str) -> Decimal:
++    """A TPC-H scale factor from 0.001 to 1 with at most three decimal places.
++
++    Args:
++        text: The scale factor as written, for example ``"0.01"``.
++
++    Returns:
++        The exact decimal value.
++
++    Raises:
++        ValueError: The text is not such a number.
++    """
++    try:
++        value = Decimal(text)
++    except (InvalidOperation, TypeError):
++        value = None
++    if value is None or not value.is_finite() or not MIN_SCALE_FACTOR <= value <= MAX_SCALE_FACTOR or value != value.quantize(SCALE_STEP):
++        raise ValueError(f"the scale factor must be a number from 0.001 to 1 with at most three decimal places, not {text!r}")
++    return value
++
++
++def expected_count(entity: str, scale_factor: Decimal, orders_count: int = 0) -> tuple:
++    """The inclusive (lowest, highest) row count TPC-H allows for an entity.
++
++    Args:
++        entity: One of ``ENTITIES``.
++        scale_factor: A value accepted by ``parse_scale_factor``.
++        orders_count: The generated ``orders`` count, needed for ``lineitem``.
++
++    Returns:
++        ``(lowest, highest)``; equal except for ``lineitem``.
++    """
++    if entity in FIXED_COUNTS:
++        return FIXED_COUNTS[entity], FIXED_COUNTS[entity]
++    if entity in BASE_COUNTS:
++        count = int(BASE_COUNTS[entity] * scale_factor)
++        return count, count
++    if entity == "lineitem":
++        return LINES_PER_ORDER[0] * orders_count, LINES_PER_ORDER[1] * orders_count
++    raise ValueError(f"unknown TPC-H entity {entity!r}; expected one of {', '.join(ENTITIES)}")
++
++
++def check_count(entity: str, scale_factor: Decimal, count: int, orders_count: int = 0) -> None:
++    """Raise when a generated count breaks the TPC-H rule for its entity.
++
++    Raises:
++        RuntimeError: The count is outside ``expected_count``.
++    """
++    lowest, highest = expected_count(entity, scale_factor, orders_count)
++    if not lowest <= count <= highest:
++        expected = str(lowest) if lowest == highest else f"{lowest} to {highest}"
++        raise RuntimeError(f"TPC-H {entity} at scale factor {scale_factor}: {count} rows, expected {expected}")
++
++
++def parse_task_args(args: list) -> tuple:
++    """The entity and scale factor from the workflow task's arguments (after ``--``).
++
++    Exits with status 2 and a usage message for invalid arguments.
++    """
++    parser = argparse.ArgumentParser(prog="generate_tpch.py", description="Generate TPC-H data and count one entity.")
++    parser.add_argument("--entity", required=True, choices=ENTITIES)
++    parser.add_argument("--scale-factor", default="0.01")
++    parsed = parser.parse_args(args)
++    try:
++        scale_factor = parse_scale_factor(parsed.scale_factor)
++    except ValueError as error:
++        parser.error(str(error))
++    return parsed.entity, scale_factor
++
++
++# %% [markdown]
++# ## Generate and count
++#
++# The entity name is checked against `ENTITIES` before it reaches SQL.
++
++
++# %%
++def generate_tpch(entity: str, scale_factor: Decimal) -> int:
++    """Generate TPC-H at ``scale_factor`` in memory, count ``entity``, and check the count.
++
++    Returns:
++        The entity's row count.
++    """
++    if entity not in ENTITIES:
++        raise ValueError(f"unknown TPC-H entity {entity!r}; expected one of {', '.join(ENTITIES)}")
++    import duckdb
++
++    with duckdb.connect() as connection:
++        connection.execute(f"CALL dbgen(sf={parse_scale_factor(str(scale_factor))})")
++        count = connection.execute(f"SELECT count(*) FROM {entity}").fetchone()[0]  # nosec B608 - entity is one of ENTITIES
++        orders_count = connection.execute("SELECT count(*) FROM orders").fetchone()[0] if entity == "lineitem" else 0
++    logger.info("TPC-H %s at scale factor %s: %d rows", entity, scale_factor, count)
++    check_count(entity, scale_factor, count, orders_count)
++    return count
++
++
++# %%
++if __name__ == "__main__":
++    # Importing this workload from pytest must not parse the caller's arguments.
++    if "ipykernel" in sys.modules:
++        entity, scale_factor = ENTITY, parse_scale_factor(SCALE_FACTOR)
++    else:
++        from notebooks.common.cli import task_args
++
++        entity, scale_factor = parse_task_args(task_args())
++    generate_tpch(entity, scale_factor)
+diff --git a/requirements.txt b/requirements.txt
+new file mode 100644
+index 0000000..7556f91
+--- /dev/null
++++ b/requirements.txt
+@@ -0,0 +1,5 @@
++# Extra packages for this repository's workload code, beyond the lakehouse platform's
++# shared set (pandas, numpy, pyarrow, PyYAML, requests, ...). Installed at the start of
++# every Airflow run and with `lakehouse-install-requirements` in Jupyter, constrained by
++# the platform lock: plain requirements only, prebuilt aarch64 wheels only.
++duckdb==1.5.6  # generate_tpch.py: TPC-H data generation
+diff --git a/tests/workload_foundation/test_generate_tpch.py b/tests/workload_foundation/test_generate_tpch.py
+new file mode 100644
+index 0000000..72e6d1c
+--- /dev/null
++++ b/tests/workload_foundation/test_generate_tpch.py
+@@ -0,0 +1,85 @@
++"""generate_tpch.py: arguments, the TPC-H count rules (P6, P7), and a DuckDB run when duckdb is installed."""
++
++import json
++import os
++from decimal import Decimal
++from pathlib import Path
++
++import pytest
++from hypothesis import given, seed, settings, strategies as st
++
++from generate_tpch import BASE_COUNTS, ENTITIES, check_count, expected_count, generate_tpch, parse_scale_factor, parse_task_args
++
++HYPOTHESIS_SEED = int(os.environ.get("HYPOTHESIS_SEED", "0"))
++REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
++# Row counts DuckDB 1.5.6 generated at scale factor 0.01 (checked in the Spark runtime image).
++COUNTS_AT_0_01 = {"region": 5, "nation": 25, "supplier": 100, "customer": 1500, "part": 2000, "partsupp": 8000, "orders": 15000, "lineitem": 60175}
++
++
++def test_task_arguments_need_an_entity_and_default_to_scale_factor_0_01():
++    assert parse_task_args(["--entity", "orders"]) == ("orders", Decimal("0.01"))
++    assert parse_task_args(["--entity", "lineitem", "--scale-factor", "0.1"]) == ("lineitem", Decimal("0.1"))
++    for args in ([], ["--entity", "lineitems"], ["--entity", "orders", "--scale-factor", "2"]):
++        with pytest.raises(SystemExit) as error:
++            parse_task_args(args)
++        assert error.value.code == 2
++
++
++@pytest.mark.parametrize("text", ["0", "-0.01", "1.001", "0.0005", "0.0101", "abc", "NaN", "Infinity", ""])
++def test_scale_factors_outside_the_rule_are_refused(text):
++    with pytest.raises(ValueError, match="from 0.001 to 1"):
++        parse_scale_factor(text)
++
++
++def test_the_counts_duckdb_generated_meet_the_rules():
++    for entity, count in COUNTS_AT_0_01.items():
++        check_count(entity, Decimal("0.01"), count, COUNTS_AT_0_01["orders"])
++    with pytest.raises(RuntimeError, match="TPC-H supplier at scale factor 0.01: 99 rows, expected 100"):
++        check_count("supplier", Decimal("0.01"), 99)
++    with pytest.raises(RuntimeError, match="expected 15000 to 105000"):
++        check_count("lineitem", Decimal("0.01"), 14999, 15000)
++    with pytest.raises(ValueError, match="unknown TPC-H entity"):
++        expected_count("lineitems", Decimal("0.01"))
++
++
++def test_the_workflow_runs_every_entity_as_its_own_task():
++    workflow = json.loads((REPOSITORY_ROOT / "workflows/generate_tpch.json").read_text(encoding="utf-8"))
++    assert [task["name"] for task in workflow["tasks"]] == [f"generate_{entity}" for entity in ENTITIES]
++    assert all(task["entrypoint"] == "generate_tpch.py" and task["args"] == ["--entity", task["name"].removeprefix("generate_")] for task in workflow["tasks"])
++    assert all("runs_after" not in task for task in workflow["tasks"])
++
++
++# --- Properties ----------------------------------------------------------------------
++
++thousandths = st.integers(min_value=1, max_value=1000)
++
++
++@seed(HYPOTHESIS_SEED)
++@settings(max_examples=200, print_blob=True)
++@given(thousandths, st.sampled_from(sorted(BASE_COUNTS)))
++def test_p6_scaled_counts_equal_integer_arithmetic_on_thousandths(steps, entity):
++    scale_factor = parse_scale_factor(f"{steps / 1000:.3f}")
++    assert expected_count(entity, scale_factor) == (BASE_COUNTS[entity] * steps // 1000,) * 2
++    assert BASE_COUNTS[entity] * steps % 1000 == 0  # every allowed scale gives a whole count
++
++
++@seed(HYPOTHESIS_SEED)
++@settings(max_examples=200, print_blob=True)
++@given(st.decimals(allow_nan=True, allow_infinity=True))
++def test_p7_exactly_the_documented_scale_factors_are_accepted(value):
++    text = str(value)
++    valid = value.is_finite() and Decimal("0.001") <= value <= 1 and value == value.quantize(Decimal("0.001"))
++    if valid:
++        assert parse_scale_factor(text) == value
++    else:
++        with pytest.raises(ValueError):
++            parse_scale_factor(text)
++
++
++# --- DuckDB (only where the requirements.txt extras are installed) ---------------------
++
++
++def test_duckdb_generates_and_checks_every_entity():
++    pytest.importorskip("duckdb")
++    for entity in ENTITIES:
++        assert generate_tpch(entity, Decimal("0.001")) > 0
+diff --git a/workflows/generate_tpch.json b/workflows/generate_tpch.json
+new file mode 100644
+index 0000000..14f1c4a
+--- /dev/null
++++ b/workflows/generate_tpch.json
+@@ -0,0 +1,17 @@
++{
++  "apiVersion": "lakehouse.local/workflow/v1",
++  "name": "generate_tpch",
++  "description": "Generate TPC-H data with DuckDB and check the row count of each entity, in one Spark container.",
++  "schedule": null,
++  "tags": ["tpch"],
++  "tasks": [
++    {"name": "generate_region", "entrypoint": "generate_tpch.py", "args": ["--entity", "region"]},
++    {"name": "generate_nation", "entrypoint": "generate_tpch.py", "args": ["--entity", "nation"]},
++    {"name": "generate_supplier", "entrypoint": "generate_tpch.py", "args": ["--entity", "supplier"]},
++    {"name": "generate_customer", "entrypoint": "generate_tpch.py", "args": ["--entity", "customer"]},
++    {"name": "generate_part", "entrypoint": "generate_tpch.py", "args": ["--entity", "part"]},
++    {"name": "generate_partsupp", "entrypoint": "generate_tpch.py", "args": ["--entity", "partsupp"]},
++    {"name": "generate_orders", "entrypoint": "generate_tpch.py", "args": ["--entity", "orders"]},
++    {"name": "generate_lineitem", "entrypoint": "generate_tpch.py", "args": ["--entity", "lineitem"]}
++  ]
++}
+-- 
+2.55.0
+
+
+From 0bc9ecd962347fdf0d392258ca81f26857c7247c Mon Sep 17 00:00:00 2001
+From: cdiogo1979 <cdiogo@gmail.com>
+Date: Tue, 10 Nov 2026 14:40:43 +0000
+Subject: [PATCH 2/2] README: Jupyter extras last one server session
+
+Only ~/work is kept across JupyterHub server restarts, so
+lakehouse-install-requirements has to be rerun after every server start.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ README.md | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/README.md b/README.md
+index 932fa90..4be75af 100644
+--- a/README.md
++++ b/README.md
+@@ -231,7 +231,7 @@ cd ~/work/opensource-lakehouse        # your clone
+ lakehouse-install-requirements        # or: lakehouse-install-requirements path/to/clone
+ ```
+ 
+-The packages go to `~/.local/lakehouse/python3.10` in your home, which survives server restarts. Running the command for another repository adds its packages too. When the platform's lock changes, the command asks you to rerun it with `--reset`, which empties that folder first.
++The packages go to `~/.local/lakehouse/python3.10`, which lasts only for the current server session (only `~/work` is kept across restarts): **rerun the command after every server start**. Running the command for another repository adds its packages too. When the platform's lock changes, the command asks you to rerun it with `--reset`, which empties that folder first.
+ 
+ **TPC-H in a notebook**: open `notebooks/workload/generate_tpch.py`, set `ENTITY` and `SCALE_FACTOR`, and run all cells.
+ 
+-- 
+2.55.0
+

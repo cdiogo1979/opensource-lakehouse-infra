@@ -1,0 +1,14 @@
+# Deferred integration inventory only. These services are intentionally not
+# configured to run. Airflow, JupyterHub, Jenkins, and StarRocks must be
+# migrated to Keycloak/Polaris and separately verified before this file gains
+# runnable service definitions. It is not included by scripts/lakehouse.sh.
+x-deferred-services:
+  airflow:
+    status: unsupported-pending-migration
+    future-service-set: [airflow-postgres, airflow-init, airflow-api-server, airflow-scheduler, airflow-dag-processor, airflow-triggerer]
+  jupyterhub:
+    status: unsupported-pending-migration
+  jenkins:
+    status: unsupported-pending-migration
+  starrocks:
+    status: unsupported-pending-migration

@@ -1,0 +1,32 @@
+{
+  "realm": "lakehouse",
+  "groups": [
+    "role-default-developer",
+    "role-default-analyst",
+    "role-default-owner",
+    "role-default-writer"
+  ],
+  "clients": {
+    "polaris": "role-claim namespace; no interactive or service-account flow",
+    "jupyterhub": {
+      "type": "confidential OIDC Authorization Code client",
+      "pkce": "S256",
+      "redirect_uri": "http://jupyterhub.localhost:8000/hub/oauth_callback",
+      "group_claim": "groups",
+      "group_values": ["role-default-developer", "role-default-analyst"]
+    },
+    "lakehouse-cli": "public Authorization Code + PKCE (S256); redirect URI supplied at invocation",
+    "write-service-account": "confidential client-credentials service identity"
+  },
+  "token_contract": {
+    "principal_name": "preferred_username",
+    "role_claim": "resource_access.polaris.roles",
+    "role_values": [
+      "role-default-developer",
+      "role-default-analyst",
+      "role-default-owner",
+      "role-default-writer"
+    ],
+    "human_access_token_lifetime_seconds": 300
+  }
+}

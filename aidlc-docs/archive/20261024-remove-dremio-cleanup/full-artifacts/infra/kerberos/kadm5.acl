@@ -1,0 +1,10 @@
+# The provisioner needs key extraction only for the users whose keytabs it
+# creates. MIT Kerberos' wildcard permission does not include `e`.
+kadmin/provisioner@LAKEHOUSE.LOCAL aie admin@LAKEHOUSE.LOCAL
+kadmin/provisioner@LAKEHOUSE.LOCAL aie write-service-account@LAKEHOUSE.LOCAL
+kadmin/provisioner@LAKEHOUSE.LOCAL aie user_a@LAKEHOUSE.LOCAL
+kadmin/provisioner@LAKEHOUSE.LOCAL aie user_b@LAKEHOUSE.LOCAL
+kadmin/provisioner@LAKEHOUSE.LOCAL *
+
+# The platform administrator can administer the KDC without extracting keys.
+admin@LAKEHOUSE.LOCAL *

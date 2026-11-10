@@ -1,0 +1,64 @@
+# Jupyter module: JupyterHub and its per-user Spark servers. Used together with
+# compose.core.yml (core and data-access networks, Keycloak, Polaris, RustFS) by
+# scripts/lakehouse.sh unless JUPYTER_ENABLED=false.
+services:
+  jupyterhub:
+    image: local/lakehouse-jupyterhub:6.1.1
+    build:
+      context: ./infra/jupyter/hub
+      dockerfile: Dockerfile
+    environment:
+      DOCKER_NOTEBOOK_IMAGE: local/lakehouse-jupyter-singleuser:6.1.1-spark
+      JUPYTER_USER_NETWORK_NAME: lakehouse-local_jupyter-user
+      DATA_ACCESS_NETWORK_NAME: lakehouse-local_data-access
+      JUPYTERHUB_OAUTH_CALLBACK_URL: http://jupyterhub.localhost:${JUPYTERHUB_HOST_PORT:-8000}/hub/oauth_callback
+      JUPYTERHUB_BROKER_BIND_IP: ${JUPYTERHUB_BROKER_BIND_IP:-172.30.240.2}
+      JUPYTERHUB_BROKER_PORT: ${JUPYTERHUB_BROKER_PORT:-8443}
+      JUPYTERHUB_BROKER_CA_HOST_PATH: ${JUPYTERHUB_BROKER_CA_HOST_PATH:-${PWD}/.runtime/container-mounts/jupyterhub-broker-ca.crt}
+      JUPYTERHUB_SINGLEUSER_CPU_LIMIT: ${JUPYTERHUB_SINGLEUSER_CPU_LIMIT:-1}
+      JUPYTERHUB_SINGLEUSER_MEMORY_LIMIT: ${JUPYTERHUB_SINGLEUSER_MEMORY_LIMIT:-2G}
+      LAKEHOUSE_DATA_PRODUCTS_DIR: /etc/jupyterhub/data-products
+    ports:
+      - 127.0.0.1:${JUPYTERHUB_HOST_PORT:-8000}:8000
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - jupyterhub-state:/srv/jupyterhub
+      - ./.runtime/container-mounts/jupyterhub-oidc-client-secret:/run/secrets/jupyterhub_oidc_client_secret:ro
+      - ./.runtime/container-mounts/jupyterhub-auth-state-crypt-key:/run/secrets/jupyterhub_auth_state_crypt_key:ro
+      - ./.runtime/container-mounts/jupyterhub-maintenance-token:/run/secrets/jupyterhub_maintenance_token:ro
+      - ./.runtime/credentials/jupyterhub-broker-server.crt:/run/certs/jupyterhub-broker-server.crt:ro
+      - ./.runtime/credentials/jupyterhub-broker-server-key.pem:/run/certs/jupyterhub-broker-server-key.pem:ro
+      - ./.runtime/container-mounts/jupyterhub-broker-ca.crt:/run/certs/jupyterhub-broker-ca.crt:ro
+      # Admission reads the product files at each sign-in (no restart for new products).
+      - ./infra/products/data_products.py:/etc/jupyterhub/data_products.py:ro
+      - ./data-products:/etc/jupyterhub/data-products:ro
+    networks:
+      core: {}
+      jupyter-user:
+        ipv4_address: ${JUPYTERHUB_BROKER_BIND_IP:-172.30.240.2}
+    depends_on:
+      keycloak:
+        condition: service_healthy
+      polaris:
+        condition: service_healthy
+      rustfs:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, /etc/jupyterhub/healthcheck.py]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: on-failure:3
+
+networks:
+  jupyter-user:
+    name: lakehouse-local_jupyter-user
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${JUPYTER_USER_SUBNET:-172.30.240.0/24}
+
+volumes:
+  jupyterhub-state:
+    name: lakehouse-local_jupyterhub-state

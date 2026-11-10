@@ -1,0 +1,171 @@
+# Explicitly opt-in, isolated Ranger test services. This file has no default-project services.
+services:
+  ranger-test-db:
+    profiles: [ranger-authorization-test]
+    build:
+      context: ./infra/ranger-test
+      dockerfile: Dockerfile.db
+    image: local/ranger-test-db:2.9.0
+    container_name: ranger-test-db
+    hostname: ranger-test-db
+    entrypoint: ["/usr/local/sbin/ranger-test-db-entrypoint"]
+    secrets:
+      - ranger-db-root-password
+      - ranger-db-service-password
+    command: ["postgres"]
+    volumes:
+      - ranger-test-db-data:/var/lib/postgresql/data
+    networks: [ranger-test-db-net]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 10s
+      timeout: 3s
+      retries: 18
+      start_period: 20s
+    restart: unless-stopped
+
+  ranger-test-admin:
+    profiles: [ranger-authorization-test]
+    build:
+      context: ./infra/ranger-test
+      dockerfile: Dockerfile.admin
+    image: local/ranger-test-admin:2.9.0
+    container_name: ranger-test-admin
+    hostname: ranger-test-admin
+    depends_on:
+      ranger-test-db:
+        condition: service_healthy
+    secrets:
+      - ranger-db-root-password
+      - ranger-db-service-password
+      - ranger-admin-password
+      - ranger-tagsync-password
+      - ranger-usersync-password
+      - ranger-keyadmin-password
+    volumes:
+      - ranger-test-admin-state:/var/lib/ranger-test-state
+      - ranger-test-admin-logs:/var/log/ranger
+    networks: [ranger-test-db-net, ranger-test-control-net]
+    healthcheck:
+      test: ["CMD-SHELL", "curl --connect-timeout 2 -fsS http://127.0.0.1:6080/login.jsp >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 180s
+    restart: unless-stopped
+
+  ranger-test-ipa:
+    profiles: [ranger-authorization-test]
+    build:
+      context: ./infra/freeipa
+      dockerfile: Dockerfile
+    image: local/ranger-test-freeipa:4.13.4
+    container_name: ranger-test-ipa
+    hostname: ipa.ranger-test.lakehouse.test
+    cgroup: host
+    environment:
+      KERBEROS_REALM: LAKEHOUSE.TEST
+      FREEIPA_HOSTNAME: ipa.ranger-test.lakehouse.test
+      IPA_SERVER_IP: 172.29.252.10
+    secrets:
+      - source: ranger-ipa-install-options
+        target: freeipa-server-install-options
+        mode: 0400
+      - ranger-ipa-admin-password
+      - ranger-usersync-bind-password
+      - ranger-test-user-password
+    volumes:
+      - ranger-test-ipa-data:/data
+      - ranger-test-ipa-run:/run
+      - ranger-test-ipa-tmp:/tmp
+      - ./infra/freeipa/entrypoint.sh:/usr/local/sbin/freeipa-entrypoint:ro
+      - ./infra/freeipa/readiness.sh:/usr/local/sbin/freeipa-readiness:ro
+      - ./infra/freeipa/patch-httpd-redirects.py:/usr/local/sbin/patch-httpd-redirects.py:ro
+      - ./infra/ranger-test/bootstrap-ipa-identities.sh:/usr/local/sbin/bootstrap-ipa-identities:ro
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    entrypoint: ["/bin/bash", "/usr/local/sbin/freeipa-entrypoint"]
+    networks:
+      ranger-test-ipa-net:
+        ipv4_address: 172.29.252.10
+        aliases: [ipa.ranger-test.lakehouse.test]
+    healthcheck:
+      test: ["CMD", "/usr/local/sbin/freeipa-readiness"]
+      interval: 30s
+      timeout: 15s
+      retries: 8
+      start_period: 10m
+  ranger-test-usersync:
+    profiles: [ranger-authorization-test]
+    build:
+      context: ./infra/ranger-test
+      dockerfile: Dockerfile.usersync
+    image: local/ranger-test-usersync:2.9.0
+    container_name: ranger-test-usersync
+    depends_on:
+      ranger-test-admin:
+        condition: service_healthy
+      ranger-test-ipa:
+        condition: service_healthy
+    secrets:
+      - ranger-usersync-password
+      - ranger-usersync-bind-password
+    volumes:
+      - ./.runtime/ranger-test/secrets/freeipa-test-ca.crt:/run/freeipa-ca/ca.crt:ro
+    networks: [ranger-test-control-net, ranger-test-ipa-net]
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f '[o]rg.apache.ranger.authentication.UnixAuthenticationService' >/dev/null"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+    restart: unless-stopped
+
+networks:
+  ranger-test-db-net:
+    name: ranger-test-db-net
+    internal: true
+  ranger-test-control-net:
+    name: ranger-test-control-net
+    internal: true
+  ranger-test-ipa-net:
+    name: ranger-test-ipa-net
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.29.252.0/24
+
+volumes:
+  ranger-test-db-data:
+    name: ranger-test-db-data
+  ranger-test-admin-state:
+    name: ranger-test-admin-state
+  ranger-test-admin-logs:
+    name: ranger-test-admin-logs
+  ranger-test-ipa-data:
+    name: ranger-test-ipa-data
+  ranger-test-ipa-run:
+    name: ranger-test-ipa-run
+  ranger-test-ipa-tmp:
+    name: ranger-test-ipa-tmp
+
+secrets:
+  ranger-db-root-password:
+    file: ./.runtime/ranger-test/secrets/ranger-db-root-password
+  ranger-db-service-password:
+    file: ./.runtime/ranger-test/secrets/ranger-db-service-password
+  ranger-admin-password:
+    file: ./.runtime/ranger-test/secrets/ranger-admin-password
+  ranger-tagsync-password:
+    file: ./.runtime/ranger-test/secrets/ranger-tagsync-password
+  ranger-usersync-password:
+    file: ./.runtime/ranger-test/secrets/ranger-usersync-password
+  ranger-keyadmin-password:
+    file: ./.runtime/ranger-test/secrets/ranger-keyadmin-password
+  ranger-ipa-install-options:
+    file: ./.runtime/ranger-test/secrets/freeipa-test-install-options
+  ranger-ipa-admin-password:
+    file: ./.runtime/ranger-test/secrets/ranger-ipa-admin-password
+  ranger-usersync-bind-password:
+    file: ./.runtime/ranger-test/secrets/ranger-usersync-bind-password
+  ranger-test-user-password:
+    file: ./.runtime/ranger-test/secrets/ranger-test-user-password
