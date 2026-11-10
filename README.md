@@ -28,14 +28,15 @@ Access everywhere follows the same Keycloak groups. Everything binds to `127.0.0
    - [StarRocks](#starrocks)
    - [Jenkins](#jenkins)
 9. [Workload Python environment](#workload-python-environment)
-10. [Operations](#operations)
+10. [Streaming checkpoints](#streaming-checkpoints)
+11. [Operations](#operations)
    - [Status and stop](#status-and-stop)
    - [Reset the platform](#reset-the-platform)
    - [Backup](#backup)
    - [Secrets and rotation](#secrets-and-rotation)
    - [Running bootstrap steps individually](#running-bootstrap-steps-individually)
-11. [Scripts](#scripts)
-12. [Known limitations](#known-limitations)
+12. [Scripts](#scripts)
+13. [Known limitations](#known-limitations)
 
 ## Components
 
@@ -445,11 +446,28 @@ Workload code runs on the same Python 3.10 and the same packages everywhere: in 
   - **CI**: `lakehouse-validate-workflows` resolves the file against the lock for that platform (it needs PyPI) and lists what it would add.
   - **Airflow**: `install_requirements` installs it into the run's own container before `validate_environment`, retrying twice 30 seconds apart; a failure stops the run before any workload code, and the container is cleaned up as usual. Without a `requirements.txt` the task does nothing and needs no network.
   - **Jupyter**: `lakehouse-install-requirements` (see [JupyterHub](#jupyterhub)).
-- **Spark sessions**: `lakehouse_spark.create_spark_session(app_name, catalog)` (`infra/workload-python/python/`, at `/opt/lakehouse/python` in both images, on the venv's path through `lakehouse-platform.pth`) is the platform's only copy of the Polaris catalogs (`lakehouse`, `lakehouse_uat`, `lakehouse_dev`), the token source and redaction.
+- **Spark sessions**: `lakehouse_spark.create_spark_session(app_name, catalog)` (`infra/workload-python/python/`, at `/opt/lakehouse/python` in both images, on the venv's path through `lakehouse-platform.pth`) is the platform's only copy of the Polaris catalogs (`lakehouse`, `lakehouse_uat`, `lakehouse_dev`, with `ResolvingFileIO`), the token source, redaction, and the checkpoint settings (see [Streaming checkpoints](#streaming-checkpoints)).
   - **Token source**: an Airflow run's broker settings, or the JupyterHub user's token; anything else is an error, with no fallback.
   - **Reuse**: a running session is returned when its default catalog matches; another catalog needs a kernel restart.
   - **Repositories** load their own `configs/<env>.yml` and pass its `catalog_name`; `spark-defaults.conf` holds only the Iceberg extensions and redaction.
 - **Checks**: `scripts/verify/workload-python-parity.sh` checks that both built images hold the workspace lock and identical packages, and that Jupyter offers only the Lakehouse kernel.
+
+## Streaming checkpoints
+
+Spark Structured Streaming jobs keep their checkpoints in their product bucket, under `checkpoints/`, in Airflow runs and in Jupyter.
+
+- **Product contract**: set `checkpoint_path: s3ckpt://<bucket>/checkpoints` in `configs/<env>.yml` (your own environment bucket, for example `s3ckpt://bucket-default-dev/checkpoints`), and give each stream its own subpath as `checkpointLocation`, such as `<checkpoint_path>/<project>/<target_table>`.
+- **Why `s3ckpt://`**: Iceberg writes a stream's initial offset through the source table's FileIO. Every catalog uses Iceberg's `ResolvingFileIO`, so `s3://` table paths go to `S3FileIO` with Polaris-vended credentials, and `s3ckpt://` goes to Hadoop S3A with the checkpoint key. `s3://` and `s3a://` checkpoints are not supported.
+- **Keys**: one RustFS user per product environment bucket, `ckpt-<bucket>`, whose only policy (`checkpoints-<bucket>`) allows listing, reading, writing and deleting below that bucket's `checkpoints/`. They are created by the product bootstrap (`infra/rustfs/bootstrap-checkpoint-keys.py`), stored in `.runtime/credentials/checkpoint-keys/` and staged in `.runtime/container-mounts/checkpoint-keys/`, and never printed.
+- **Who gets which key**:
+  - an Airflow run gets only its product environment's key (`prod` from `<product>-main`, `uat` from `<product>-uat`), and fails at `create_cluster` if it is missing;
+  - a Jupyter server gets the `dev` keys of the products where the user is owner or developer, and never a `uat` or `prod` key; analysts get none;
+  - a checkpoint in a bucket without a mounted key fails: there is no global or fallback key.
+- **Shared keys**: a key belongs to a product environment, not to a person, so code in a Jupyter server can read its dev keys, and a notebook and a dev stream with the same path share the checkpoint. A new product membership needs a server restart.
+- **Rotation**: `./scripts/lakehouse.sh rotate-checkpoint-keys [--product FILE]` replaces the secrets. The old secrets are refused at once, so restart the affected Airflow runs and Jupyter servers.
+- **Quiet logs**: `create_spark_session` logs only errors from three loggers whose stream warnings need no action (`CheckpointFileManager`'s FileContext fallback, `ResolveWriteToStream`, S3A's `MetricsConfig`). S3 renames are not atomic, so keep one writer per checkpoint. Hadoop's one `NativeCodeLoader` line per session remains.
+- **Iceberg sources with deletes**: a stream fails on a source snapshot that deletes or overwrites data, unless it sets `streaming-skip-delete-snapshots` or `streaming-skip-overwrite-snapshots` (the job's choice: skipped changes are not applied).
+- **Checks**: `python3 scripts/verify/checkpoint-keys.py` checks every key's allowed and refused access; `scripts/verify/checkpoint-stream.sh` runs an Iceberg stream twice in separate sessions and checks that the second resumes with no reprocessing.
 
 ## Operations
 
@@ -500,6 +518,7 @@ The reset deletes all local platform state, so the next start begins from nothin
   4. Restart the service, for example `docker compose -f compose.core.yml up -d rustfs`.
 
   `infra/keycloak/bootstrap-realm.py` refuses to continue while the file and Keycloak disagree.
+- **Checkpoint keys**: `./scripts/lakehouse.sh rotate-checkpoint-keys [--product FILE]` (see [Streaming checkpoints](#streaming-checkpoints)).
 - **JupyterHub auth-state key**: do not regenerate it while Hub sessions must stay readable.
 - **LDAP**:
   - **Keycloak's bind password** (`.runtime/credentials/ldap-keycloak-password`): change the file, then restart `ldap` (it re-hashes the bind entry at start) and rerun `python3 infra/keycloak/bootstrap-realm.py`, which updates and tests the provider.
@@ -516,6 +535,7 @@ python3 infra/keycloak/bootstrap-realm.py               # realm, clients, produc
 ./scripts/bootstrap/bootstrap-polaris-realm.sh           # Polaris internal operator principal
 python3 infra/rustfs/bootstrap-buckets.py                # buckets
 python3 infra/rustfs/bootstrap-policies.py               # RustFS group policies
+python3 infra/rustfs/bootstrap-checkpoint-keys.py        # checkpoint keys (users, policies, staged files)
 python3 infra/polaris/bootstrap-catalogs.py              # catalogs and namespaces
 python3 infra/polaris/bootstrap-product-authorization.py # Polaris grants
 python3 infra/polaris/reconcile-keycloak-groups.py       # Polaris principals from Keycloak groups
@@ -531,7 +551,7 @@ python3 infra/products/product-cli.py record --all       # lock the applied prod
 
 | Path | Purpose |
 |---|---|
-| `scripts/lakehouse.sh` | `start`, `status`, `stop`, `reset`, `reconcile-starrocks`, and the Airflow commands |
+| `scripts/lakehouse.sh` | `start`, `status`, `stop`, `reset`, `reconcile-starrocks`, `rotate-checkpoint-keys`, and the Airflow commands |
 | `scripts/bootstrap-default-product.sh` | the product bootstrap (Quick start step 2) |
 | `scripts/setup/` | credentials, certificates, and preflight checks used by `start`; `lock-workload-python.sh` regenerates the workload lock |
 | `infra/workload-python/` | the shared workload Python packages (`requirements.in`, `requirements.lock`) and `workload_python.py`, their checks and installer |

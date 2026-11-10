@@ -33,6 +33,10 @@ from .redact import redact_spark_output
 from .spec import Workflow
 
 CONTAINER_BUNDLE_ROOT = Path("/opt/lakehouse-bundle")
+# Staged checkpoint keys (infra/rustfs/bootstrap-checkpoint-keys.py): the read-only folder
+# mounted here, and the path where a run container receives its one key.
+CHECKPOINT_KEYS_DIR = Path("/run/secrets/checkpoint-keys")
+CHECKPOINT_KEY_TARGET = "/run/secrets/lakehouse-checkpoints"
 # The shared workload Python environment in the Spark runtime image (infra/workload-python).
 WORKLOAD_PYTHON = "/opt/lakehouse/venv/bin/python"
 WORKLOAD_PYTHON_TOOL = "/opt/lakehouse/workload_python.py"
@@ -122,6 +126,26 @@ def _broker_request(method: str, route: str, payload: Mapping[str, Any] | None, 
         raise AirflowException("The token broker request failed; sensitive response details were suppressed.") from None
 
 
+def _checkpoint_key_volume(product: str, environment: str, keys_dir: Path | None = None) -> dict[str, dict[str, str]]:
+    """The run's one checkpoint key: the bucket of its product and environment, mounted read-only."""
+    keys_dir = keys_dir or CHECKPOINT_KEYS_DIR
+    host_value = os.environ.get("LAKEHOUSE_CHECKPOINT_KEYS_HOST_DIR", "")
+    host_dir = Path(host_value)
+    if not host_dir.is_absolute() or host_dir.name != "checkpoint-keys":
+        raise AirflowException("LAKEHOUSE_CHECKPOINT_KEYS_HOST_DIR must be the absolute path of the staged checkpoint-keys folder.")
+    try:
+        index = json.loads((keys_dir / ".buckets.json").read_text(encoding="utf-8"))
+        bucket = index[product][environment]
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise AirflowException(f"No staged checkpoint key bucket for {product} {environment}; run the product bootstrap.") from error
+    if not isinstance(bucket, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]", bucket):
+        raise AirflowException(f"The checkpoint key index holds an invalid bucket for {product} {environment}.")
+    staged = keys_dir / bucket
+    if staged.is_symlink() or not staged.is_file():
+        raise AirflowException(f"The checkpoint key for {bucket} is missing or unsafe; run the product bootstrap.")
+    return {str(host_dir / bucket): {"bind": f"{CHECKPOINT_KEY_TARGET}/{bucket}", "mode": "ro"}}
+
+
 def _create_spark_container(
     image: str,
     network: str,
@@ -139,6 +163,7 @@ def _create_spark_container(
     dag_id = context["dag"].dag_id
     container_name = _container_name(dag_id, str(context["run_id"]))
     docker_bundle_source = _docker_host_bundle_path(bundle_source)
+    checkpoint_key = _checkpoint_key_volume(product, environment)
     control_token = _read_broker_control_token()
     registration = _broker_request("POST", "/v1/runs", {"dag_id": dag_id, "run_id": str(context["run_id"])}, control_token)
     if not isinstance(registration, dict):
@@ -152,6 +177,7 @@ def _create_spark_container(
     volumes = {
         docker_bundle_source: {"bind": str(CONTAINER_BUNDLE_ROOT), "mode": "ro"},
         broker_ca_host_path: {"bind": broker_ca_container_path, "mode": "ro"},
+        **checkpoint_key,
     }
     client = docker.DockerClient(base_url=docker_url)
     container = None

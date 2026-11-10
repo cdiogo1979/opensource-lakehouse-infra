@@ -42,6 +42,40 @@ def eligible_group_names(groups: object) -> frozenset[str]:
     return frozenset(groups).intersection(approved_groups())
 
 
+CHECKPOINT_ROLES = ("owner", "developer")
+CHECKPOINT_ENVIRONMENT = "dev"
+
+
+def checkpoint_buckets(groups: object, products=None) -> tuple[str, ...]:
+    """The dev buckets whose checkpoint keys a user's server receives: products where a group is owner or developer.
+
+    Never a uat or prod bucket; malformed claims give none.
+    """
+    if not isinstance(groups, (list, tuple, set)) or any(not isinstance(v, str) for v in groups):
+        return ()
+    products = data_products.load_all() if products is None else products
+    member = frozenset(groups)
+    return tuple(sorted(
+        product.environment(CHECKPOINT_ENVIRONMENT).bucket
+        for product in products
+        if any(product.group(role) in member for role in CHECKPOINT_ROLES)
+    ))
+
+
+def checkpoint_key_volumes(buckets, host_dir: str, staged_dir: Path) -> dict[str, dict[str, str]]:
+    """Read-only mounts of the staged keys; a missing or unsafe file fails the spawn."""
+    host = Path(host_dir)
+    if not host.is_absolute() or host.name != "checkpoint-keys":
+        raise RuntimeError("The checkpoint key host folder is not configured safely.")
+    volumes = {}
+    for bucket in buckets:
+        staged = staged_dir / bucket
+        if staged.is_symlink() or not staged.is_file():
+            raise RuntimeError(f"The checkpoint key for {bucket} is missing; run the product bootstrap.")
+        volumes[str(host / bucket)] = {"bind": f"/run/secrets/lakehouse-checkpoints/{bucket}", "mode": "ro"}
+    return volumes
+
+
 def persistent_home_volume(subject: str) -> str:
     """Use a stable, collision-resistant Docker volume name without exposing sub."""
     if not isinstance(subject, str) or not subject.strip():

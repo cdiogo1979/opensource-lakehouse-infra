@@ -57,7 +57,7 @@ def test_removal_order_matches_the_design():
     order = [
         "product-cli.py resolve", "summarize", "Type the product name", "product-cli.py backup",
         "apply_jenkins", "bootstrap-starrocks.py --remove", "bootstrap-product-authorization.py --remove",
-        "bootstrap-catalogs.py --remove", "bootstrap-buckets.py --remove", "bootstrap-policies.py --remove",
+        "bootstrap-catalogs.py --remove", "bootstrap-checkpoint-keys.py --remove", "bootstrap-buckets.py --remove", "bootstrap-policies.py --remove",
         "product-identity.py --remove", "reconcile-keycloak-groups.py", "product-cli.py forget",
     ]
     positions = [text.index(marker) for marker in order]
@@ -68,7 +68,7 @@ def test_apply_order_matches_the_design():
     text = (ROOT / "scripts/operations/create-data-product.sh").read_text()
     order = [
         "product-cli.py validate", "product-identity.py", "bootstrap-buckets.py", "bootstrap-policies.py",
-        "bootstrap-catalogs.py", "bootstrap-product-authorization.py", "reconcile-keycloak-groups.py",
+        "bootstrap-checkpoint-keys.py", "bootstrap-catalogs.py", "bootstrap-product-authorization.py", "reconcile-keycloak-groups.py",
         "bootstrap-starrocks.py", "reconcile-starrocks-users.py", "apply_jenkins", "product-cli.py record",
     ]
     positions = [text.index(marker) for marker in order]
@@ -123,3 +123,13 @@ def test_forget_refuses_default(products):
 def test_create_user_script_delegates_to_the_validated_command():
     text = (ROOT / "scripts/operations/create-user.sh").read_text()
     assert re.search(r'exec python3 infra/keycloak/create-user.py "\$@"', text)
+
+
+def test_checkpoint_keys_follow_the_policies_in_every_bootstrap_and_the_launcher_checks_them():
+    default = (ROOT / "scripts/bootstrap-default-product.sh").read_text()
+    assert default.index("bootstrap-policies.py") < default.index("bootstrap-checkpoint-keys.py") < default.index("bootstrap-catalogs.py")
+    launcher = (ROOT / "scripts/lakehouse.sh").read_text()
+    assert "bootstrap-checkpoint-keys.py --check-staged" in launcher
+    assert 'rotate-checkpoint-keys) require_tools; python3 infra/rustfs/bootstrap-checkpoint-keys.py --rotate "${@:2}" ;;' in launcher
+    start_airflow = launcher[launcher.index("start_airflow() {"):]
+    assert start_airflow.index("prepare_checkpoint_keys") < start_airflow.index('"${AIRFLOW_COMPOSE[@]}" up')

@@ -20,6 +20,7 @@ scripts/bootstrap/bootstrap-users.sh
 bash scripts/bootstrap/bootstrap-polaris-realm.sh
 python3 infra/rustfs/bootstrap-buckets.py
 python3 infra/rustfs/bootstrap-policies.py
+python3 infra/rustfs/bootstrap-checkpoint-keys.py
 python3 infra/polaris/bootstrap-catalogs.py
 python3 infra/polaris/bootstrap-product-authorization.py
 python3 infra/polaris/reconcile-keycloak-groups.py

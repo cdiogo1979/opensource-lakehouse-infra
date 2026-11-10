@@ -27,6 +27,7 @@ x-airflow-common: &airflow-common
     LAKEHOUSE_BROKER_CA_FILE: /run/certs/airflow-token-broker-ca.crt
     LAKEHOUSE_BROKER_CA_HOST_PATH: ${LAKEHOUSE_BROKER_CA_HOST_PATH:?Set by scripts/lakehouse.sh}
     LAKEHOUSE_BROKER_CA_CONTAINER_PATH: /run/certs/airflow-token-broker-ca.crt
+    LAKEHOUSE_CHECKPOINT_KEYS_HOST_DIR: ${LAKEHOUSE_CHECKPOINT_KEYS_HOST_DIR:?Set by scripts/lakehouse.sh}
     LAKEHOUSE_SPARK_IMAGE: ${LAKEHOUSE_SPARK_IMAGE:-local/lakehouse-spark-runtime:3.5.5_1.10.2}
     LAKEHOUSE_SPARK_DOCKER_NETWORK: lakehouse-local_airflow-spark
     LAKEHOUSE_SPARK_DATA_NETWORK: lakehouse-local_data-access
@@ -136,6 +137,8 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${LAKEHOUSE_BUNDLE_HOST_ROOT:?Set by scripts/lakehouse.sh}:${LAKEHOUSE_BUNDLE_CONTAINER_ROOT:-/opt/airflow/dag_bundles}
       - ${LAKEHOUSE_BROKER_CA_HOST_PATH:?Set by scripts/lakehouse.sh}:/run/certs/airflow-token-broker-ca.crt:ro
+      # Staged checkpoint keys: the factory checks the run's key here and mounts only that file.
+      - ${LAKEHOUSE_CHECKPOINT_KEYS_HOST_DIR:?Set by scripts/lakehouse.sh}:/run/secrets/checkpoint-keys:ro
       # The platform DAG factory: builds product DAGs from workflows/*.json and runs their tasks.
       - ./infra/airflow/lakehouse_dags:/opt/lakehouse/python/lakehouse_dags:ro
     networks: [airflow-internal, core]

@@ -180,6 +180,14 @@ def canonical_policy(document: object) -> dict | None:
                 if values is None:
                     return None
                 item[key] = values
+        if "Condition" in item:
+            # RustFS returns condition values in its own order (operator -> key -> values).
+            condition = item["Condition"]
+            if not isinstance(condition, dict) or not all(isinstance(keys, dict) for keys in condition.values()):
+                return None
+            item["Condition"] = {operator: {key: _as_sorted_list(values) for key, values in keys.items()} for operator, keys in condition.items()}
+            if any(values is None for keys in item["Condition"].values() for values in keys.values()):
+                return None
         statements.append(item)
     unique = {json.dumps(item, sort_keys=True): item for item in statements}
     return {

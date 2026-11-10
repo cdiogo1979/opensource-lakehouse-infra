@@ -118,3 +118,13 @@ def test_widgets_have_matching_kernel_and_jupyterlab_versions():
     assert "ipywidgets==8.1.9" in (ROOT / "infra/workload-python/requirements.in").read_text().split()
     lab = [line for line in (JUPYTER_DIR / "requirements.txt").read_text().split() if line.startswith("jupyterlab_widgets==")]
     assert lab and lab[0] in lock
+
+
+def test_the_runtime_image_adds_pinned_s3a_jars_with_strict_checksums_and_jupyter_inherits_them():
+    for artifact in ("org.apache.hadoop:hadoop-aws:3.3.4", "com.amazonaws:aws-java-sdk-bundle:1.12.262"):
+        line = next(line for line in RUNTIME.splitlines() if f"-Dartifact={artifact}" in line)
+        command = RUNTIME[: RUNTIME.index(line)].rsplit("mvn ", 1)[1]
+        assert "--strict-checksums" in command
+    assert "COPY --from=token-provider-build /build/s3a/hadoop-aws-3.3.4.jar /build/s3a/aws-java-sdk-bundle-1.12.262.jar /opt/spark/jars/" in RUNTIME
+    # The Jupyter image takes /opt/spark, jars included, from the runtime image.
+    assert "COPY --from=spark-runtime /opt/spark /opt/spark" in JUPYTER

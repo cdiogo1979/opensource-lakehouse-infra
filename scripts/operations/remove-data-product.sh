@@ -84,7 +84,8 @@ python3 infra/starrocks/bootstrap-starrocks.py --remove "${product[@]}" ${purge_
 step "Polaris: roles and grants, then tables, namespaces, and allowed locations"
 python3 infra/polaris/bootstrap-product-authorization.py --remove "${product[@]}" ${dry[@]+"${dry[@]}"}
 python3 infra/polaris/bootstrap-catalogs.py --remove "${product[@]}" ${purge_args[@]+"${purge_args[@]}"} ${dry[@]+"${dry[@]}"}
-step "RustFS: buckets and policies"
+step "RustFS: checkpoint keys, buckets, and policies"
+python3 infra/rustfs/bootstrap-checkpoint-keys.py --remove "${product[@]}" ${dry[@]+"${dry[@]}"}
 python3 infra/rustfs/bootstrap-buckets.py --remove "${product[@]}" ${purge_args[@]+"${purge_args[@]}"} ${dry[@]+"${dry[@]}"}
 python3 infra/rustfs/bootstrap-policies.py --remove "${product[@]}" ${dry[@]+"${dry[@]}"}
 step "Keycloak: writer user, groups, and client roles"

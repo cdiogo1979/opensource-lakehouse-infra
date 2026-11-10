@@ -50,3 +50,6 @@ def shuffled_documents(draw, documents=policy_documents):
         for statement in document["Statement"]
     ]
     return document, {**document, "Statement": draw(st.permutations(statements))}
+
+# Bucket names as the product model allows them (checkpoint keys).
+bucket_names = st.from_regex(r"\A[a-z0-9][a-z0-9-]{1,30}[a-z0-9]\Z")

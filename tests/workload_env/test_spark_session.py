@@ -1,10 +1,12 @@
-"""The platform Spark session module, lakehouse_spark (spark-session BR-S1 to BR-S6; P1, P2).
+"""The platform Spark session module, lakehouse_spark (spark-session BR-S1 to BR-S6; P1, P2; s3-checkpoints R14 to R18, P3, P4).
 
 PySpark is replaced by a fake builder, so these tests run on the host. A real session
 is started live in both images (Build and Test).
 """
 
+import json
 import os
+import re
 import sys
 import types
 from pathlib import Path
@@ -49,7 +51,7 @@ def test_an_airflow_run_gets_every_platform_setting_and_no_token_request():
     with patch.dict(os.environ, AIRFLOW_ENV, clear=True), patch.dict(sys.modules, modules), patch.object(ls, "request_user_token") as request:
         _, name, applied = ls.create_spark_session("uat-load_sales", catalog="lakehouse_uat")
     request.assert_not_called()
-    assert name == "uat-load_sales" and applied == ls.catalog_settings("lakehouse_uat")
+    assert name == "uat-load_sales" and applied == {**ls.catalog_settings("lakehouse_uat"), **ls.checkpoint_settings({})}
     assert applied["spark.sql.defaultCatalog"] == "lakehouse_uat"
 
 
@@ -140,3 +142,115 @@ def test_p2_the_token_source_follows_the_decision_table(env):
             ls.select_token_source(env)
     else:
         assert ls.select_token_source(env) == expected
+
+
+# --- Checkpoint keys (s3-checkpoints R14 to R18) ----------------------------------------
+
+
+def write_key(folder, bucket, secret="s3cr3t-value", access=None):
+    path = folder / bucket
+    path.write_text(json.dumps({"access_key": access or f"ckpt-{bucket}", "secret_key": secret}), encoding="utf-8")
+    return path
+
+
+def test_every_catalog_uses_resolving_file_io():
+    applied = ls.catalog_settings("lakehouse")
+    assert {applied[f"spark.sql.catalog.{c}.io-impl"] for c in ls.CATALOGS} == {"org.apache.iceberg.io.ResolvingFileIO"}
+
+
+def test_without_mounted_keys_s3a_is_configured_with_no_key_at_all(tmp_path):
+    assert ls.checkpoint_key_files(tmp_path / "absent") == {}
+    applied = ls.checkpoint_settings({}, "eu-west-1")
+    assert applied["spark.hadoop.fs.s3ckpt.impl"] == "org.apache.hadoop.fs.s3a.S3AFileSystem"
+    assert applied["spark.hadoop.fs.s3a.aws.credentials.provider"] == "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider"
+    assert applied["spark.hadoop.fs.s3a.endpoint.region"] == "eu-west-1"
+    assert applied["spark.hadoop.fs.s3a.directory.marker.retention"] == "keep"
+    assert not any(key.endswith((".access.key", ".secret.key")) for key in applied)
+    assert "spark.hadoop.fs.s3.impl" not in applied and "spark.hadoop.fs.s3a.impl" not in applied
+
+
+def test_mounted_keys_become_per_bucket_settings_only(tmp_path):
+    write_key(tmp_path, "bucket-a-dev", "secret-a")
+    write_key(tmp_path, "bucket-b-dev", "secret-b")
+    applied = ls.checkpoint_settings(ls.checkpoint_key_files(tmp_path))
+    assert applied["spark.hadoop.fs.s3a.bucket.bucket-a-dev.access.key"] == "ckpt-bucket-a-dev"
+    assert applied["spark.hadoop.fs.s3a.bucket.bucket-b-dev.secret.key"] == "secret-b"
+    assert "spark.hadoop.fs.s3a.access.key" not in applied and "spark.hadoop.fs.s3a.secret.key" not in applied
+
+
+@pytest.mark.parametrize("content", ["not json", "[]", '{"access_key": "ckpt-bucket-a-dev"}', '{"access_key": "ckpt-other", "secret_key": "x"}',
+                                     '{"access_key": "ckpt-bucket-a-dev", "secret_key": ""}', '{"access_key": "ckpt-bucket-a-dev", "secret_key": "x", "extra": 1}'])
+def test_invalid_key_files_stop_the_session_without_showing_their_content(tmp_path, content):
+    (tmp_path / "bucket-a-dev").write_text(content, encoding="utf-8")
+    with pytest.raises(ValueError) as error:
+        ls.checkpoint_key_files(tmp_path)
+    assert str(error.value) == "The checkpoint key file for bucket-a-dev is invalid."
+
+
+def test_symlinks_and_unexpected_entries_are_refused(tmp_path):
+    target = write_key(tmp_path / "..", "bucket-a-dev")
+    folder = tmp_path / "keys"
+    folder.mkdir()
+    (folder / "bucket-a-dev").symlink_to(target)
+    with pytest.raises(ValueError, match="Unexpected entry"):
+        ls.checkpoint_key_files(folder)
+    (folder / "bucket-a-dev").unlink()
+    (folder / "Not_A_Bucket").write_text("{}")
+    with pytest.raises(ValueError, match="Unexpected entry"):
+        ls.checkpoint_key_files(folder)
+
+
+def test_the_key_repr_never_shows_the_secret():
+    assert "s3cr3t" not in repr(ls.CheckpointKey("ckpt-bucket-a-dev", "s3cr3t"))
+
+
+def test_the_session_merges_mounted_keys_and_the_redaction_covers_them(tmp_path):
+    write_key(tmp_path, "bucket-a-prod")
+    modules, _ = fake_pyspark()
+    with patch.dict(os.environ, dict(AIRFLOW_ENV, AWS_REGION="us-east-1"), clear=True), patch.dict(sys.modules, modules), \
+            patch.object(ls.checkpoint_key_files, "__defaults__", (tmp_path,)):
+        applied = ls.create_spark_session("prod-job", catalog="lakehouse")[2]
+    redaction = re.compile(applied["spark.redaction.regex"])
+    for key in ("spark.hadoop.fs.s3a.bucket.bucket-a-prod.access.key", "spark.hadoop.fs.s3a.bucket.bucket-a-prod.secret.key"):
+        assert key in applied and redaction.search(key)
+
+
+bucket_names = st.from_regex(r"\A[a-z0-9][a-z0-9-]{1,20}[a-z0-9]\Z")
+secrets_text = st.text(alphabet="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_", min_size=1, max_size=40)
+
+
+@SETTINGS
+@given(st.dictionaries(bucket_names, secrets_text, max_size=5))
+def test_p3_settings_hold_one_key_pair_per_bucket_and_no_global_key(buckets):
+    keys = {bucket: ls.CheckpointKey(f"ckpt-{bucket}", secret) for bucket, secret in buckets.items()}
+    applied = ls.checkpoint_settings(keys)
+    pairs = {key for key in applied if key.endswith((".access.key", ".secret.key"))}
+    assert pairs == {f"spark.hadoop.fs.s3a.bucket.{b}.{kind}.key" for b in buckets for kind in ("access", "secret")}
+    assert all(applied[f"spark.hadoop.fs.s3a.bucket.{b}.secret.key"] == s for b, s in buckets.items())
+
+
+@SETTINGS
+@given(bucket_names, secrets_text, st.dictionaries(st.text(max_size=8), st.one_of(st.text(max_size=8), st.integers()), max_size=3))
+def test_p4_valid_key_files_round_trip_and_anything_else_is_refused(bucket, secret, extra):
+    valid = {"access_key": f"ckpt-{bucket}", "secret_key": secret}
+    assert ls.parse_checkpoint_key(bucket, json.dumps(valid)) == ls.CheckpointKey(f"ckpt-{bucket}", secret)
+    altered = {**valid, **extra}
+    if altered != valid:
+        with pytest.raises(ValueError):
+            ls.parse_checkpoint_key(bucket, json.dumps(altered))
+
+
+def test_known_harmless_stream_warnings_are_lowered_to_errors_and_failures_are_ignored():
+    calls = []
+
+    class Configurator:
+        @staticmethod
+        def setLevel(name, level):
+            calls.append((name, level))
+
+    jvm = types.SimpleNamespace(org=types.SimpleNamespace(apache=types.SimpleNamespace(logging=types.SimpleNamespace(
+        log4j=types.SimpleNamespace(Level=types.SimpleNamespace(ERROR="ERROR"), core=types.SimpleNamespace(config=types.SimpleNamespace(Configurator=Configurator)))))))
+    ls._quiet_known_warnings(types.SimpleNamespace(_jvm=jvm))
+    assert calls == [(name, "ERROR") for name in ls.QUIET_LOGGERS]
+    ls._quiet_known_warnings(types.SimpleNamespace(_jvm=types.SimpleNamespace()))  # no log4j: ignored
+    ls._quiet_known_warnings(("not", "a", "session"))  # no JVM: ignored

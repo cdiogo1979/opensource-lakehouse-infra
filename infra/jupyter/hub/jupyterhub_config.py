@@ -86,6 +86,7 @@ c.DockerSpawner.pull_policy = "ifnotpresent"
 c.DockerSpawner.network_name = os.environ["JUPYTER_USER_NETWORK_NAME"]
 c.DockerSpawner.data_access_network_name = os.environ["DATA_ACCESS_NETWORK_NAME"]
 c.LakehouseDockerSpawner.broker_ca_host_path = os.environ["JUPYTERHUB_BROKER_CA_HOST_PATH"]
+c.LakehouseDockerSpawner.checkpoint_keys_host_dir = os.environ["JUPYTERHUB_CHECKPOINT_KEYS_HOST_DIR"]
 c.DockerSpawner.environment = {
     "LAKEHOUSE_TOKEN_BROKER_URL": "https://jupyterhub:8443/api/v1/token",
     "LAKEHOUSE_TOKEN_BROKER_CA": "/run/certs/jupyterhub-broker-ca.crt",

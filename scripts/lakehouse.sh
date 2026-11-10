@@ -40,7 +40,15 @@ if [[ "$STARROCKS_ENABLED" == true ]]; then MODULE_FILES+=(-f compose.starrocks.
 COMPOSE=(docker compose -f compose.core.yml ${MODULE_FILES[@]+"${MODULE_FILES[@]}"})
 AIRFLOW_COMPOSE=("${COMPOSE[@]}" -f compose.airflow.yml --profile airflow)
 
-usage() { echo "Usage: scripts/lakehouse.sh {start|status|stop|start-airflow|airflow-status|stop-airflow|reconcile-starrocks [--dry-run]|reset [--yes|--dry-run]}" >&2; }
+usage() { echo "Usage: scripts/lakehouse.sh {start|status|stop|start-airflow|airflow-status|stop-airflow|reconcile-starrocks [--dry-run]|rotate-checkpoint-keys [--product FILE]|reset [--yes|--dry-run]}" >&2; }
+
+# The staged checkpoint keys are bind-mounted into the Hub and the Airflow scheduler; create the
+# folder first so Docker never creates it, and say which buckets still lack a key.
+prepare_checkpoint_keys() {
+  mkdir -p "$ROOT_DIR/.runtime/container-mounts/checkpoint-keys"
+  chmod 755 "$ROOT_DIR/.runtime/container-mounts/checkpoint-keys"
+  python3 infra/rustfs/bootstrap-checkpoint-keys.py --check-staged
+}
 
 require_tools() {
   command -v docker >/dev/null 2>&1 || { echo "ERROR: Docker is required." >&2; return 1; }
@@ -93,9 +101,12 @@ start_stack() {
   if [[ "$JUPYTER_ENABLED" == true ]]; then
     python3 scripts/setup/prepare-jupyterhub-broker-certificates.py
     JUPYTERHUB_BROKER_CA_HOST_PATH="$ROOT_DIR/.runtime/container-mounts/jupyterhub-broker-ca.crt"
-    export JUPYTERHUB_BROKER_CA_HOST_PATH
+    JUPYTERHUB_CHECKPOINT_KEYS_HOST_DIR="$ROOT_DIR/.runtime/container-mounts/checkpoint-keys"
+    export JUPYTERHUB_BROKER_CA_HOST_PATH JUPYTERHUB_CHECKPOINT_KEYS_HOST_DIR
     python3 scripts/setup/check-jupyter-user-network.py
     python3 scripts/setup/validate-jupyterhub-credentials.py
+    # A first bootstrap starts the stack before the keys exist; spawns then fail only for those buckets.
+    prepare_checkpoint_keys || echo "NOTICE: Jupyter servers of the products above get no checkpoint key until the product bootstrap runs."
     docker build -t local/lakehouse-jupyter-singleuser:6.1.1-spark \
       -f infra/jupyter/singleuser/Dockerfile .
     "${COMPOSE[@]}" build jupyterhub
@@ -148,10 +159,11 @@ prepare_airflow_environment() {
   LAKEHOUSE_BUNDLE_HOST_ROOT="${LAKEHOUSE_BUNDLE_HOST_ROOT:-${ROOT_DIR}/.runtime/airflow-dag-bundles}"
   LAKEHOUSE_BUNDLE_CONTAINER_ROOT="${LAKEHOUSE_BUNDLE_CONTAINER_ROOT:-/opt/airflow/dag_bundles}"
   LAKEHOUSE_BROKER_CA_HOST_PATH="${LAKEHOUSE_BROKER_CA_HOST_PATH:-${ROOT_DIR}/.runtime/container-mounts/airflow-token-broker-ca.crt}"
+  LAKEHOUSE_CHECKPOINT_KEYS_HOST_DIR="${ROOT_DIR}/.runtime/container-mounts/checkpoint-keys"
   LAKEHOUSE_BUNDLE_CONFIG_LIST="$(python3 scripts/setup/airflow-bundle-config.py)"
   AIRFLOW_HOST_PORT="${AIRFLOW_HOST_PORT:-8085}"
   export AIRFLOW_UID DOCKER_GID LAKEHOUSE_BUNDLE_HOST_ROOT
-  export LAKEHOUSE_BUNDLE_CONTAINER_ROOT LAKEHOUSE_BROKER_CA_HOST_PATH LAKEHOUSE_BUNDLE_CONFIG_LIST AIRFLOW_HOST_PORT
+  export LAKEHOUSE_BUNDLE_CONTAINER_ROOT LAKEHOUSE_BROKER_CA_HOST_PATH LAKEHOUSE_CHECKPOINT_KEYS_HOST_DIR LAKEHOUSE_BUNDLE_CONFIG_LIST AIRFLOW_HOST_PORT
 }
 
 airflow_service_state() {
@@ -199,6 +211,8 @@ start_airflow() {
   python3 scripts/setup/prepare-runtime.py
   bash scripts/setup/provision-airflow-secrets.sh
   python3 scripts/setup/prepare-airflow-broker-certificates.py
+  # Every run mounts its product environment's checkpoint key; refuse to start without them.
+  prepare_checkpoint_keys
   local fingerprint recorded
   # Bundles and broker writers follow data-products/*.yaml; the broker reads its writers only at start.
   fingerprint="$(python3 scripts/setup/stage-airflow-writers.py)"
@@ -228,6 +242,7 @@ case "${1:-}" in
   start) start_stack ;;
   reset) require_tools; python3 scripts/operations/reset-lakehouse.py "${@:2}" ;;
   reconcile-starrocks) require_tools; python3 infra/starrocks/reconcile-starrocks-users.py "${@:2}" ;;
+  rotate-checkpoint-keys) require_tools; python3 infra/rustfs/bootstrap-checkpoint-keys.py --rotate "${@:2}" ;;
   status) require_tools; show_status ;;
   start-airflow) start_airflow ;;
   airflow-status)

@@ -55,9 +55,10 @@ product=(--product "$file")
 
 step "Keycloak: groups, client roles, platform-admin owner role, writer user"
 python3 infra/keycloak/product-identity.py "${product[@]}" ${dry[@]+"${dry[@]}"} "${ADMIN_ARGS[@]}"
-step "RustFS: buckets and policies"
+step "RustFS: buckets, policies, and checkpoint keys"
 python3 infra/rustfs/bootstrap-buckets.py "${product[@]}" ${dry[@]+"${dry[@]}"}
 python3 infra/rustfs/bootstrap-policies.py "${product[@]}" ${dry[@]+"${dry[@]}"}
+python3 infra/rustfs/bootstrap-checkpoint-keys.py "${product[@]}" ${dry[@]+"${dry[@]}"}
 step "Polaris: allowed locations, namespaces, roles, namespace-scoped grants"
 python3 infra/polaris/bootstrap-catalogs.py "${product[@]}" ${dry[@]+"${dry[@]}"}
 python3 infra/polaris/bootstrap-product-authorization.py "${product[@]}" ${dry[@]+"${dry[@]}"}

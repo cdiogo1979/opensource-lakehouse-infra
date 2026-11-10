@@ -46,6 +46,13 @@ def airflow_settings(monkeypatch, tmp_path):
     monkeypatch.setenv("LAKEHOUSE_BROKER_CA_HOST_PATH", str(ca))
     monkeypatch.setenv("LAKEHOUSE_BUNDLE_HOST_ROOT", "/host/bundles")
     monkeypatch.setenv("LAKEHOUSE_BUNDLE_CONTAINER_ROOT", "/opt/airflow/dag_bundles")
+    keys = tmp_path / "staged" / "checkpoint-keys"
+    keys.mkdir(parents=True)
+    (keys / ".buckets.json").write_text(json.dumps({"default": {"prod": "bucket-default", "uat": "bucket-default-uat", "dev": "bucket-default-dev"}}))
+    for bucket in ("bucket-default", "bucket-default-uat", "bucket-default-dev"):
+        (keys / bucket).write_text("{}")
+    monkeypatch.setattr(factory, "CHECKPOINT_KEYS_DIR", keys)
+    monkeypatch.setenv("LAKEHOUSE_CHECKPOINT_KEYS_HOST_DIR", "/host/runtime/checkpoint-keys")
 
 
 def bundle(tmp_path, name="default-uat", documents=(GOLDEN,)):
@@ -262,6 +269,38 @@ def test_create_cluster_mounts_the_bundle_read_only_and_passes_only_run_scoped_v
     environment = fake.created["environment"]
     assert (environment["LAKEHOUSE_ENVIRONMENT"], environment["LAKEHOUSE_PRODUCT"], environment["PYTHONPATH"]) == ("uat", "default", "/opt/lakehouse-bundle")
     assert "t" * 40 not in json.dumps(environment)  # the control token never reaches the container
+    keys = {source: target for source, target in fake.created["volumes"].items() if target["bind"].startswith("/run/secrets/lakehouse-checkpoints")}
+    assert keys == {"/host/runtime/checkpoint-keys/bucket-default-uat": {"bind": "/run/secrets/lakehouse-checkpoints/bucket-default-uat", "mode": "ro"}}
+
+
+def test_each_run_mounts_exactly_its_own_environment_key():
+    for environment, bucket in (("prod", "bucket-default"), ("uat", "bucket-default-uat")):
+        assert factory._checkpoint_key_volume("default", environment) == {
+            f"/host/runtime/checkpoint-keys/{bucket}": {"bind": f"/run/secrets/lakehouse-checkpoints/{bucket}", "mode": "ro"}}
+
+
+@pytest.mark.parametrize("problem", ["missing", "symlink", "no-index", "unknown-product", "bad-host-dir", "bad-bucket"])
+def test_a_missing_or_unsafe_key_fails_before_the_run_is_registered(monkeypatch, problem):
+    keys = factory.CHECKPOINT_KEYS_DIR
+    if problem == "missing":
+        (keys / "bucket-default-uat").unlink()
+    elif problem == "symlink":
+        (keys / "bucket-default-uat").unlink()
+        (keys / "bucket-default-uat").symlink_to(keys / "bucket-default")
+    elif problem == "no-index":
+        (keys / ".buckets.json").unlink()
+    elif problem == "bad-host-dir":
+        monkeypatch.setenv("LAKEHOUSE_CHECKPOINT_KEYS_HOST_DIR", "relative/checkpoint-keys")
+    elif problem == "bad-bucket":
+        (keys / ".buckets.json").write_text(json.dumps({"default": {"uat": "../etc"}}))
+    product = "other" if problem == "unknown-product" else "default"
+    calls = []
+    monkeypatch.setattr(factory, "_broker_request", lambda *a: calls.append(a))
+    monkeypatch.setattr(factory.docker, "DockerClient", lambda base_url: pytest.fail("no container may be created"))
+    with pytest.raises(AirflowException, match="checkpoint"):
+        factory._create_spark_container("img", "net", "data", "unix://x", "/opt/airflow/dag_bundles/default-uat/versions/abc",
+                                        "uat", product, "us-east-1", "/ca", "/run/ca", **context())
+    assert calls == []
 
 
 def test_create_cluster_failure_removes_the_container_and_revokes_the_run(monkeypatch):

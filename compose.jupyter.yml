@@ -15,6 +15,7 @@ services:
       JUPYTERHUB_BROKER_BIND_IP: ${JUPYTERHUB_BROKER_BIND_IP:-172.30.240.2}
       JUPYTERHUB_BROKER_PORT: ${JUPYTERHUB_BROKER_PORT:-8443}
       JUPYTERHUB_BROKER_CA_HOST_PATH: ${JUPYTERHUB_BROKER_CA_HOST_PATH:-${PWD}/.runtime/container-mounts/jupyterhub-broker-ca.crt}
+      JUPYTERHUB_CHECKPOINT_KEYS_HOST_DIR: ${JUPYTERHUB_CHECKPOINT_KEYS_HOST_DIR:-${PWD}/.runtime/container-mounts/checkpoint-keys}
       JUPYTERHUB_SINGLEUSER_CPU_LIMIT: ${JUPYTERHUB_SINGLEUSER_CPU_LIMIT:-1}
       JUPYTERHUB_SINGLEUSER_MEMORY_LIMIT: ${JUPYTERHUB_SINGLEUSER_MEMORY_LIMIT:-2G}
       LAKEHOUSE_DATA_PRODUCTS_DIR: /etc/jupyterhub/data-products
@@ -29,6 +30,8 @@ services:
       - ./.runtime/credentials/jupyterhub-broker-server.crt:/run/certs/jupyterhub-broker-server.crt:ro
       - ./.runtime/credentials/jupyterhub-broker-server-key.pem:/run/certs/jupyterhub-broker-server-key.pem:ro
       - ./.runtime/container-mounts/jupyterhub-broker-ca.crt:/run/certs/jupyterhub-broker-ca.crt:ro
+      # Staged checkpoint keys: the spawner mounts each user's dev keys from here by host path.
+      - ./.runtime/container-mounts/checkpoint-keys:/run/secrets/checkpoint-keys:ro
       # Admission reads the product files at each sign-in (no restart for new products).
       - ./infra/products/data_products.py:/etc/jupyterhub/data_products.py:ro
       - ./data-products:/etc/jupyterhub/data-products:ro
