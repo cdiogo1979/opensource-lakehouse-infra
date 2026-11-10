@@ -236,3 +236,107 @@ def test_p4_product_bundles_map_and_everything_else_is_refused(product, branch, 
     assert found == identity.Identity(f"{product}-{branch}", product, {"main": "prod", "uat": "uat"}[branch])
     with pytest.raises(ValueError):
         identity.identity_for(base / other / layout / "dags/lakehouse.py")
+
+
+# --- Subprojects (workflow-subprojects FR-1 to FR-4) ---------------------------------
+
+
+def subproject_repository(root, project="sample"):
+    """A repository with one flat workflow and one in workflows/<project>/ with its code in notebooks/workload/<project>/."""
+    repository(root)
+    sub = json.loads(json.dumps(EXAMPLE))
+    sub["name"] = "generate_tpch"
+    sub["tasks"] = [{"name": "generate_orders", "entrypoint": "generate_tpch.py", "args": ["--entity", "orders"]}]
+    (root / "workflows" / project).mkdir()
+    (root / "workflows" / project / "generate_tpch.json").write_text(json.dumps(sub))
+    (root / "notebooks/workload" / project).mkdir()
+    (root / "notebooks/workload" / project / "generate_tpch.py").write_text("print('ok')\n")
+    return root
+
+
+def test_subproject_workflows_load_next_to_flat_ones_with_their_own_code_folder(tmp_path):
+    workflows, problems = spec.load_repository(subproject_repository(tmp_path))
+    assert problems == []
+    by_name = {w.name: w for w in workflows}
+    assert by_name["test_environment"].project is None and by_name["generate_tpch"].project == "sample"
+    assert by_name["generate_tpch"].source == "workflows/sample/generate_tpch.json"
+    assert by_name["generate_tpch"].entrypoint_path(by_name["generate_tpch"].tasks[0]) == "sample/generate_tpch.py"
+    assert by_name["test_environment"].entrypoint_path(by_name["test_environment"].tasks[0]) == "test_environment.py"
+
+
+def test_a_subproject_entrypoint_must_exist_in_its_own_folder(tmp_path):
+    root = subproject_repository(tmp_path)
+    (root / "notebooks/workload/sample/generate_tpch.py").rename(root / "notebooks/workload/generate_tpch.py")
+    _, problems = spec.load_repository(root)
+    assert [str(p) for p in problems] == ["workflows/sample/generate_tpch.json: tasks[0].entrypoint: notebooks/workload/sample/generate_tpch.py does not exist"]
+
+
+def test_workflow_names_are_unique_across_subprojects(tmp_path):
+    root = subproject_repository(tmp_path)
+    (root / "workflows/other").mkdir()
+    (root / "workflows/sample/generate_tpch.json").replace(root / "workflows/other/test_environment.json")
+    text = (root / "workflows/other/test_environment.json").read_text().replace('"generate_tpch"', '"test_environment"')
+    (root / "workflows/other/test_environment.json").write_text(text.replace("generate_tpch.py", "count_sample_rows.py"))
+    (root / "notebooks/workload/other").mkdir()
+    (root / "notebooks/workload/other/count_sample_rows.py").write_text("print('ok')\n")
+    workflows, problems = spec.load_repository(root)
+    assert [w.source for w in workflows] == ["workflows/other/test_environment.json"]  # the first one in sorted order wins
+    assert [str(p) for p in problems] == [
+        "workflows/test_environment.json: name: is also used by workflows/other/test_environment.json; workflow names are unique across subprojects"]
+
+
+def test_folder_rules_report_invalid_names_nesting_and_other_files_but_skip_hidden_entries(tmp_path):
+    root = subproject_repository(tmp_path)
+    (root / "workflows/bad name").mkdir()
+    (root / "workflows/sample/deeper").mkdir()
+    (root / "workflows/sample/notes.txt").write_text("x")
+    (root / "workflows/sample/.hidden.json").write_text("{")
+    (root / "workflows/.cache").mkdir()
+    (root / "workflows/sample/__pycache__").mkdir()
+    workflows, problems = spec.load_repository(root)
+    assert {w.name for w in workflows} == {"test_environment", "generate_tpch"}
+    assert sorted(str(p) for p in problems) == [
+        "workflows/bad name: a subproject folder name must match [A-Za-z0-9][A-Za-z0-9_-]{0,49}",
+        "workflows/sample/deeper: only *.json workflow files belong in workflows/sample/",
+        "workflows/sample/notes.txt: only *.json workflow files belong in workflows/sample/",
+    ]
+
+
+def test_the_validator_accepts_a_subproject_repository(tmp_path, capsys):
+    root = subproject_repository(tmp_path)
+    assert validate.main([str(root)]) == 0 and capsys.readouterr().out == "OK: 2 workflow(s)\n"
+
+
+@settings(max_examples=60, print_blob=True, suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow])
+@given(workflow_list=ws.repositories())
+def test_p5_flat_and_subproject_repositories_round_trip(tmp_path_factory, workflow_list):
+    """PBT-02: a repository written from generated workflows (flat or in subproject folders) loads back to the same workflows."""
+    root = ws.write_repository(tmp_path_factory.mktemp("repo"), workflow_list)
+    loaded, problems = spec.load_repository(root)
+    assert problems == []
+    key = lambda w: (w.source, w.project, spec.to_document(w))  # noqa: E731
+    assert sorted(map(key, loaded), key=str) == sorted(map(key, workflow_list), key=str)
+
+
+@pytest.mark.parametrize(("entrypoint", "ok"), [
+    ("bronze/load.py", True), ("silver/clean.py", True), ("gold/report.py", True), ("ops/patch.py", True), ("deploy/views.py", True), ("other/smoke.py", True),
+    ("raw/load.py", False), ("bronze/x/load.py", False), ("../load.py", False), ("bronze/../load.py", False), ("/abs.py", False), ("Bronze/load.py", False),
+])
+def test_entrypoints_may_sit_in_a_medallion_layer_folder_only(tmp_path, entrypoint, ok):
+    """CR-1: <layer>/<file>.py with a known layer, resolved in the subproject's code folder."""
+    root = subproject_repository(tmp_path)
+    document = json.loads((root / "workflows/sample/generate_tpch.json").read_text())
+    document["tasks"][0]["entrypoint"] = entrypoint
+    (root / "workflows/sample/generate_tpch.json").write_text(json.dumps(document))
+    target = root / "notebooks/workload/sample" / entrypoint
+    if ok:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("print('ok')\n")
+    workflows, problems = spec.load_repository(root)
+    if ok:
+        assert problems == []
+        workflow = next(w for w in workflows if w.project == "sample")
+        assert workflow.entrypoint_path(workflow.tasks[0]) == f"sample/{entrypoint}"
+    else:
+        assert [p.field for p in problems] == ["tasks[0].entrypoint"]
+        assert "optionally in a layer folder" in problems[0].message

@@ -369,7 +369,7 @@ def build_dag(workflow: Workflow, bundle_root: Path, identity: Identity) -> DAG:
             task_id=f"submit_{task.name}",
             python_callable=_submit_spark_job,
             op_kwargs={
-                "entrypoint": task.entrypoint,
+                "entrypoint": workflow.entrypoint_path(task),
                 "environment": identity.environment,
                 "spark_master": spark_master,
                 "args": list(task.args),

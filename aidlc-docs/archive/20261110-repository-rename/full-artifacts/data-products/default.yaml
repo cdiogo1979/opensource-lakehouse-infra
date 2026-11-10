@@ -1,0 +1,51 @@
+# The default data product. It cannot be removed. Applied by `create-data-product.sh data-products/default.yaml`.
+# Names (namespaces, buckets, MV databases, groups, writer user) are locked once
+# applied; access levels and app mappings may be changed and reapplied.
+apiVersion: lakehouse.local/v1
+name: default
+description: The default data product, created by the platform bootstrap
+# Every environment uses its shared Polaris catalog; the product owns the
+# namespace, the bucket, and the StarRocks materialized-view database.
+environments:
+  prod: {catalog: lakehouse, namespace: default_lh, bucket: bucket-default, mv_database: default_lh}
+  uat: {catalog: lakehouse_uat, namespace: default_lhuat, bucket: bucket-default-uat, mv_database: default_lhuat}
+  dev: {catalog: lakehouse_dev, namespace: default_lhdev, bucket: bucket-default-dev, mv_database: default_lhdev}
+# Keycloak groups; names must match role-<token>-<role>.
+groups:
+  owner: role-default-owner
+  developer: role-default-developer
+  analyst: role-default-analyst
+  writer: role-default-writer
+# Data access per role and environment (none, read, write, manage), applied to
+# the Polaris namespaces, the StarRocks databases, and the RustFS buckets.
+access:
+  owner: {prod: manage, uat: manage, dev: manage}
+  developer: {prod: read, uat: read, dev: write}
+  analyst: {prod: read, uat: none, dev: none}
+  writer: {prod: write, uat: write, dev: write}
+# StarRocks materialized-view databases (none, read, author, manage).
+materialized_views:
+  owner: {prod: manage, uat: manage, dev: manage}
+  developer: {prod: read, uat: read, dev: author}
+  analyst: {prod: read, uat: none, dev: none}
+  writer: {prod: author, uat: author, dev: author}
+# Application access. Airflow has no per-product permissions, so its roles apply
+# platform-wide. Jenkins rights apply to the product's folder: the owner is always
+# its admin, and the roles below get these folder permissions (and Overall/Read).
+apps:
+  jupyterhub: [developer, analyst]
+  airflow: {owner: User, developer: User, analyst: User, writer: Viewer}
+  jenkins:
+    developer: [Job/Read, Job/Build, Job/Cancel, Job/Workspace]
+    analyst: [Job/Read]
+# Airflow DAGs: bundles default-main (main) and default-uat (uat), read anonymously.
+# Jenkins: default/default_ci (main and uat) and default/default_cd (pull request branches).
+repo:
+  url: https://github.com/cdiogo1979/opensource-lakehouse-sample-dp.git
+  prod_branch: main
+  uat_branch: uat
+# Service user for the product's workloads; its password file is written when
+# the user is created (default password ChangeM3!) and never reset afterwards.
+writer_user:
+  username: srv-default-writer
+  password_file: .runtime/credentials/srv-default-writer-password

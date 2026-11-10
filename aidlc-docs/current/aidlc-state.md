@@ -2,56 +2,55 @@
 
 ## Project Information
 - Project Type: Brownfield
-- Start Date: 2026-11-10T23:15:00Z
-- Current Stage: DEPLOY - Deploy (approval pending)
-- Intent: Follow the user's renames: the platform workspace folder (opensource-lakehouse-infra-v2 to opensource-lakehouse-infra) and the workload repository (cdiogo1979/opensource-lakehouse to cdiogo1979/opensource-lakehouse-sample-dp): recreate the stack from the new folder, update the product file, docs, tests and the notebooks' Initialization path.
-- Intent ID: 20261110-repository-rename
-- Previous Intent: aidlc-docs/archive/20261110-platform-spark-session-helper (closed)
+- Start Date: 2026-11-11T00:50:00Z
+- Current Stage: DEPLOY - Deploy (approved; intent closure)
+- Intent: Subproject folders for product repositories: the platform DAG factory and validator accept workflows/<project>/<name>.json with entry points in notebooks/workload/<project>/, next to the existing flat layout; DAG IDs stay <bundle>-<name>.
+- Intent ID: 20261111-workflow-subprojects
+- Previous Intent: aidlc-docs/archive/20261110-repository-rename (closed)
 
 ## Workspace State
-- Existing code: Yes (this workspace, now at /Users/carlosdiogo/code_repo/opensource-lakehouse-infra; the workload repository in a scratchpad clone).
-- Workspace root: /Users/carlosdiogo/code_repo/opensource-lakehouse-infra
-- Git metadata: None in this infrastructure workspace.
-- Reverse Engineering Needed: No (the references were inventoried directly; see requirements.md).
-- Knowledge project folder: aidlc-docs/knowledge/opensource-lakehouse-infra-v2/ (name kept as a stable identifier; archives link to it).
+- Existing code: Yes. Workspace root: /Users/carlosdiogo/code_repo/opensource-lakehouse-infra. Git metadata: none.
+- Reverse Engineering Needed: No (canonical functional-design/airflow-workflows.md describes the component).
+- Note: draft edits to infra/airflow/lakehouse_dags/spec.py and factory.py were made before this intent was opened (see audit); they are reviewed in Code Generation.
 
 ## Code Location Rules
 - Application Code: Workspace root (NEVER in aidlc-docs/)
 - Documentation: aidlc-docs/ only
 
 ## Stage Progress
-- [x] Workspace Detection — brownfield; previous intent closed; reverse engineering skipped (direct inventory).
-- [x] Requirements Analysis — approved on 2026-11-10.
-- [x] Workflow Planning — approved on 2026-11-10.
-- [ ] Reverse Engineering, User Stories, Application Design, Units Generation — SKIP.
-- [ ] Functional, NFR, Infrastructure Design — SKIP.
-- [x] Code Generation — approved on 2026-11-10.
-- [x] Build and Test — approved on 2026-11-10 (with CR-1, CR-2).
-- [ ] Deploy — handoff written; awaiting approval.
+- [x] Workspace Detection — brownfield; previous intent closed.
+- [x] Requirements Analysis — approved on 2026-11-11.
+- [x] Workflow Planning — approved on 2026-11-11.
+- [ ] Design stages — SKIP.
+- [x] Code Generation — approved on 2026-11-11.
+- [x] Build and Test — approved on 2026-11-11 (with CR-1, CR-2).
+- [x] Deploy — handoff approved on 2026-11-11.
 
 ## Extension Configuration
 | Extension | Enabled | Decided At |
 |---|---|---|
 | Security Baseline | No | Requirements Analysis (as previous intents) |
-| Property-Based Testing | No (no new business logic) | Requirements Analysis |
-| Resiliency Baseline | No | Requirements Analysis (as previous intents) |
+| Property-Based Testing | Partial (PBT-02, 03, 07, 08, 09) | Requirements Analysis (the spec already has Hypothesis properties) |
+| Resiliency Baseline | No | Requirements Analysis |
 | Workflow Conventions | Yes (always enforced) | Workflow start |
 
 ## Current Status
 - Lifecycle Phase: DEPLOY
 - Current Stage: Deploy
 - Next Stage: Intent closure (artifact compaction)
-- Status: Awaiting approval of the Deploy handoff.
+- Status: Verification complete; closing the intent.
 
 ## Intent Lifecycle
 <!-- intent-lifecycle:start -->
 ```json
 {
+  "archive": "aidlc-docs/archive/20261111-workflow-subprojects",
   "current_stage": "DEPLOY - Deploy",
-  "intent_id": "20261110-repository-rename",
-  "name": "Repository Rename",
-  "previous_intent": "aidlc-docs/archive/20261110-platform-spark-session-helper",
-  "status": "IN_PROGRESS"
+  "intent_id": "20261111-workflow-subprojects",
+  "name": "Workflow Subprojects",
+  "previous_intent": "aidlc-docs/archive/20261110-repository-rename",
+  "status": "CLOSED",
+  "summary": "aidlc-docs/archive/20261111-workflow-subprojects/intent-summary.md"
 }
 ```
 <!-- intent-lifecycle:end -->
@@ -61,4 +60,3 @@
 - **JupyterHub keeps the product model it started with**: the Hub imports `infra/products/data_products.py` once, through a single-file bind mount; after that file changes, the Hub fails closed on newer product files until it restarts (found and fixed by a restart on 2026-11-10). The product commands or `start` should restart the Hub when the file changes.
 - **Enforcing bundle class**: a later phase to stop Airflow parsing extra repository `.py` files under `dags/`. Since CR-6 (2026-11-10) Airflow scans only `dags/`, so this is limited to files there, which CI refuses.
 - **RustFS console**: adopt a RustFS release that bundles console v0.1.38 or later.
-- **Pre-reset backup**: `.runtime/backups/20261031-pre-reset` is no longer needed to restore Jenkins jobs; keep or delete at the user's choice.

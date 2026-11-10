@@ -1,8 +1,11 @@
 """Workflow JSON v1: parse and validate a product repository's workflows (BR-1 to BR-3, BR-10).
 
 Standard library only, so the Jenkins validator can use it without Airflow. A
-product repository holds ``workflows/<name>.json`` (one DAG each), its code in
-``notebooks/workload/``, and the stub ``dags/lakehouse.py`` (``STUB_TEXT``).
+product repository holds ``workflows/<name>.json`` (one DAG each) with its code in
+``notebooks/workload/``, or per subproject ``workflows/<project>/<name>.json`` with
+its code in ``notebooks/workload/<project>/`` (notebooks optionally in the layer
+folders ``bronze``, ``silver``, ``gold``, ``ops``, ``deploy``, ``other``), and the stub
+``dags/lakehouse.py`` (``STUB_TEXT``).
 """
 
 from __future__ import annotations
@@ -29,7 +32,11 @@ RESERVED_TAG = "spark"
 # Names never start with a dot: workflows/.<name>.json would be a hidden file.
 NAME = re.compile(r"[a-zA-Z0-9_-][a-zA-Z0-9_.-]{0,99}")
 TAG = re.compile(r"[a-zA-Z0-9_.:-]{1,50}")
-ENTRYPOINT = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\.py")
+# A notebook may sit in a medallion layer folder of its code folder: "<layer>/<file>.py".
+LAYERS = ("bronze", "silver", "gold", "ops", "deploy", "other")
+ENTRYPOINT = re.compile(rf"(?:(?:{'|'.join(LAYERS)})/)?[A-Za-z0-9_][A-Za-z0-9_.-]*\.py")
+# A subproject groups its workflows in workflows/<project>/ and its code in notebooks/workload/<project>/.
+PROJECT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,49}")
 WORKFLOW_KEYS = {"apiVersion", "name", "schedule", "description", "tags", "tasks"}
 TASK_KEYS = {"name", "entrypoint", "runs_after", "args", "retries", "retry_delay_seconds", "execution_timeout_seconds"}
 MAX_TASKS = 50
@@ -56,6 +63,11 @@ class Workflow:
     description: str | None = None
     tags: tuple[str, ...] = ()
     source: str = ""
+    project: str | None = None
+
+    def entrypoint_path(self, task: Task) -> str:
+        """A task's entry point relative to notebooks/workload/: ``<project>/<file>`` in a subproject."""
+        return f"{self.project}/{task.entrypoint}" if self.project else task.entrypoint
 
 
 @dataclass(frozen=True)
@@ -107,7 +119,7 @@ def _string_list(value: Any, field: str, out: _Collector) -> list[str] | None:
     return value
 
 
-def _task(raw: Any, index: int, root: Path | None, out: _Collector) -> Task | None:
+def _task(raw: Any, index: int, root: Path | None, out: _Collector, project: str | None = None) -> Task | None:
     where = f"tasks[{index}]"
     if not isinstance(raw, dict):
         out.add(where, "must be an object")
@@ -119,10 +131,11 @@ def _task(raw: Any, index: int, root: Path | None, out: _Collector) -> Task | No
     if not isinstance(name, str) or not NAME.fullmatch(name):
         out.add(f"{where}.name", "is required: 1 to 100 of a-z A-Z 0-9 _ . -, not starting with a dot")
     entrypoint = raw.get("entrypoint")
+    code_dir = WORKLOAD_DIR / project if project else WORKLOAD_DIR
     if not isinstance(entrypoint, str) or not ENTRYPOINT.fullmatch(entrypoint):
-        out.add(f"{where}.entrypoint", "is required and must be a .py file name in notebooks/workload/")
-    elif root is not None and not (root / WORKLOAD_DIR / entrypoint).is_file():
-        out.add(f"{where}.entrypoint", f"notebooks/workload/{entrypoint} does not exist")
+        out.add(f"{where}.entrypoint", f"is required: a .py file name in {code_dir.as_posix()}/, optionally in a layer folder ({', '.join(LAYERS)})")
+    elif root is not None and not (root / code_dir / entrypoint).is_file():
+        out.add(f"{where}.entrypoint", f"{code_dir.as_posix()}/{entrypoint} does not exist")
     runs_after = _string_list(raw.get("runs_after", []), f"{where}.runs_after", out)
     if runs_after is not None and len(set(runs_after)) != len(runs_after):
         out.add(f"{where}.runs_after", "lists a task more than once")
@@ -164,8 +177,12 @@ def _graph(tasks: list[Task], out: _Collector) -> None:
             del pending[name]
 
 
-def parse_workflow(text: str, path: str, root: Path | None = None) -> tuple[Workflow | None, list[Problem]]:
-    """Validate one workflow file's text; ``root`` enables the entrypoint-exists check."""
+def parse_workflow(text: str, path: str, root: Path | None = None, project: str | None = None) -> tuple[Workflow | None, list[Problem]]:
+    """Validate one workflow file's text; ``root`` enables the entrypoint-exists check.
+
+    A workflow of subproject ``project`` (``workflows/<project>/<name>.json``) names
+    entry points in ``notebooks/workload/<project>/``.
+    """
     out = _Collector(path)
     try:
         raw = json.loads(text)
@@ -202,13 +219,13 @@ def parse_workflow(text: str, path: str, root: Path | None = None) -> tuple[Work
     if not isinstance(raw_tasks, list) or not 1 <= len(raw_tasks) <= MAX_TASKS:
         out.add("tasks", f"is required and must hold 1 to {MAX_TASKS} tasks")
     else:
-        parsed = [_task(item, index, root, out) for index, item in enumerate(raw_tasks)]
+        parsed = [_task(item, index, root, out, project) for index, item in enumerate(raw_tasks)]
         if all(task is not None for task in parsed):
             tasks = parsed
             _graph(tasks, out)
     if out.problems:
         return None, out.problems
-    return Workflow(name, raw["schedule"], tuple(tasks), description, tuple(tags), path), []
+    return Workflow(name, raw["schedule"], tuple(tasks), description, tuple(tags), path, project), []
 
 
 def to_document(workflow: Workflow) -> dict[str, Any]:
@@ -233,31 +250,58 @@ def to_document(workflow: Workflow) -> dict[str, Any]:
     return document
 
 
-def workflow_files(root: Path) -> list[Path]:
+def _hidden(path: Path) -> bool:
+    return path.name.startswith(".") or path.name == "__pycache__"
+
+
+def workflow_files(root: Path) -> list[tuple[Path, str | None]]:
+    """``(path, project)`` for every entry of workflows/ and of its subproject folders."""
     directory = root / WORKFLOWS_DIR
-    return sorted(directory.iterdir()) if directory.is_dir() else []
+    if not directory.is_dir():
+        return []
+    entries: list[tuple[Path, str | None]] = []
+    for path in sorted(directory.iterdir()):
+        if path.is_dir() and not _hidden(path) and PROJECT.fullmatch(path.name):
+            entries += [(child, path.name) for child in sorted(path.iterdir())]
+        else:
+            entries.append((path, None))
+    return entries
 
 
 def load_repository(root: Path) -> tuple[list[Workflow], list[Problem]]:
-    """Every workflow of a repository checkout, or the problems that block them."""
+    """Every workflow of a repository checkout, or the problems that block them.
+
+    Workflows live in ``workflows/<name>.json`` or ``workflows/<project>/<name>.json``;
+    a name is unique across the repository, because the DAG ID is ``<bundle>-<name>``.
+    """
     workflows: list[Workflow] = []
     problems: list[Problem] = []
-    for path in workflow_files(root):
+    seen: dict[str, str] = {}
+    for path, project in workflow_files(root):
         relative = path.relative_to(root).as_posix()
-        if path.name.startswith(".") or path.name == "__pycache__":
+        if _hidden(path):
+            continue
+        if path.is_dir() and project is None:
+            problems.append(Problem(relative, "", "a subproject folder name must match [A-Za-z0-9][A-Za-z0-9_-]{0,49}"))
             continue
         if not path.is_file() or path.suffix != ".json":
-            problems.append(Problem(relative, "", "only *.json workflow files belong in workflows/"))
+            where = f"workflows/{project}/" if project else "workflows/"
+            problems.append(Problem(relative, "", f"only *.json workflow files belong in {where}"))
             continue
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             problems.append(Problem(relative, "", "cannot be read as UTF-8 text"))
             continue
-        workflow, found = parse_workflow(text, relative, root)
+        workflow, found = parse_workflow(text, relative, root, project)
         problems += found
-        if workflow is not None:
-            workflows.append(workflow)
+        if workflow is None:
+            continue
+        if workflow.name in seen:
+            problems.append(Problem(relative, "name", f"is also used by {seen[workflow.name]}; workflow names are unique across subprojects"))
+            continue
+        seen[workflow.name] = relative
+        workflows.append(workflow)
     return workflows, problems
 
 

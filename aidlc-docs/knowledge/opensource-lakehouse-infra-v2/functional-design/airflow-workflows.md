@@ -7,7 +7,7 @@ Current functional design of the platform component that turns data product repo
 
 | A product repository holds | The platform holds |
 |---|---|
-| `workflows/<name>.json`, one DAG each | DAG construction, the task callables, and the JSON rules |
+| `workflows/<project>/<name>.json` (or flat `workflows/<name>.json`), one DAG each | DAG construction, the task callables, and the JSON rules |
 | `notebooks/` (workload entry points and the `common/` helpers, also used by Jupyter) | The Spark container lifecycle, the broker registration, renewal and revocation, and redaction |
 | `configs/<env>.yml`, optional `configs/<product>/<env>.yml` | The CI validator |
 | `dags/lakehouse.py`, the fixed stub (`spec.STUB_TEXT`) | |
@@ -28,7 +28,7 @@ Current functional design of the platform component that turns data product repo
 | `validate` | standard library | `python3 -m lakehouse_dags.validate [ROOT]` |
 
 ## Rules
-- **Workflow file**: `workflows/<name>.json`, a JSON object, in UTF-8. Only `*.json` files belong in `workflows/` (hidden files are ignored).
+- **Workflow file**: `workflows/<name>.json` or, per subproject, `workflows/<project>/<name>.json` (`<project>` matching `[A-Za-z0-9][A-Za-z0-9_-]{0,49}`, one level), a JSON object, in UTF-8. Only `*.json` files belong in `workflows/` and its subproject folders; invalid folder names, deeper folders and other files are problems; hidden entries are ignored. A workflow name is unique across the repository (DAG IDs don't include the subproject); a repeated name is a problem naming both files.
   - `apiVersion`: exactly `lakehouse.local/workflow/v1`.
   - `name`: `[a-zA-Z0-9_-][a-zA-Z0-9_.-]{0,99}`, equal to the file stem.
   - `schedule`: required; `null`, or a string of 1 to 100 printable characters.
@@ -38,7 +38,7 @@ Current functional design of the platform component that turns data product repo
   - Unknown keys are refused, and booleans are never integers.
 - **Task**:
   - `name`: same pattern as the workflow name, unique.
-  - `entrypoint`: `[A-Za-z0-9_][A-Za-z0-9_.-]*\.py`, existing in `notebooks/workload/`.
+  - `entrypoint`: `[A-Za-z0-9_][A-Za-z0-9_.-]*\.py`, optionally prefixed by a layer folder `bronze/`, `silver/`, `gold/`, `ops/`, `deploy/` or `other/` (one level, no `..`), existing in the workflow's code folder: `notebooks/workload/<project>/` for a subproject workflow, `notebooks/workload/` for a flat one (`Workflow.entrypoint_path`).
   - `runs_after`: distinct names of existing tasks, no self-reference, no cycle.
   - `args`: at most 50 strings, each 1 to 500 printable characters.
   - `retries` 0 to 10; `retry_delay_seconds` 0 to 3600, only with `retries` ≥ 1; `execution_timeout_seconds` 1 to 86400.
@@ -55,7 +55,7 @@ Current functional design of the platform component that turns data product repo
   - **`create_cluster`**: registers `{dag_id, run_id}` with the broker over the pinned endpoint and CA. It starts `lakehouse-<dag_id[:40]>-<sha256(run_id)[:12]>` with the run's bundle checkout at `/opt/lakehouse-bundle` (read-only) and the broker CA. The environment holds the token, run handle and capability, `LAKEHOUSE_ENVIRONMENT`, `LAKEHOUSE_PRODUCT`, and `PYTHONPATH=/opt/lakehouse-bundle`. If startup fails, it removes the container and revokes the run.
   - **`install_requirements`**: an `exec_run` in that container of `/opt/lakehouse/venv/bin/python /opt/lakehouse/workload_python.py install-extras /opt/lakehouse-bundle/requirements.txt --lock /opt/lakehouse/requirements.lock`: nothing without the file; otherwise the extras, constrained by the lock, into the container's venv, with the output redacted (rules in `workload-python-environment.md`).
   - **`validate_environment`**: an `exec_run` in that container of `/opt/lakehouse/venv/bin/python -c` with the repository's `notebooks/common/config_loader.load_environment_config(env, /opt/lakehouse-bundle/configs, product)`.
-  - **`submit_<task>`**: `spark-submit --master <LAKEHOUSE_SPARK_MASTER> /opt/lakehouse-bundle/notebooks/workload/<entrypoint> --environment <env> --config-dir /opt/lakehouse-bundle/configs`, then `--` and the `args` when there are any. Arguments are passed as a list, and the output is redacted.
+  - **`submit_<task>`**: `spark-submit --master <LAKEHOUSE_SPARK_MASTER> /opt/lakehouse-bundle/notebooks/workload/[<project>/]<entrypoint> --environment <env> --config-dir /opt/lakehouse-bundle/configs`, then `--` and the `args` when there are any. Arguments are passed as a list, and the output is redacted.
   - **`stop_cluster`**: removes the container and revokes the broker run.
 - **Repository code never runs in the scheduler**: it runs only inside the run's Spark container. At parse time, the dag-processor imports only files under `dags/` (the bundles' `subdir`): the stub, and any other `.py` file a repository might add there, which CI refuses.
 - **Loading**: `load_workflows` validates every file first.
@@ -63,11 +63,12 @@ Current functional design of the platform component that turns data product repo
   - **No workflows**: without `workflows/`, or with no workflow files, nothing is built and nothing fails.
 - **Validator** (`check_repository`): the workflow rules, plus `dags/lakehouse.py` must equal `STUB_TEXT` (line endings normalized) and `dags/` may hold nothing else (`__pycache__` excepted). Exit 0 prints `OK: <n> workflow(s)`; exit 1 prints the problems and `N problem(s)`; exit 2 means a usage error. The Jenkins wrapper `lakehouse-validate-workflows` then checks a root `requirements.txt`, when present, with `workload_python.py check-extras`; it exits 1 if either check fails.
 - **Bundle checkouts**: `sparse_dirs` is `dags`, `workflows`, `notebooks`, `configs`; Git's cone mode also checks out every root file, such as `requirements.txt`. `subdir` is `dags`, so Airflow's DAG folder is `dags/`, while the stub still takes the repository root from its own path. Airflow applies `sparse_dirs` only at the first clone, so `scripts/setup/sync-bundle-checkouts.py`, run by `start-airflow` before Airflow starts, updates each configured bundle's `tracking_repo` when its sparse list differs.
-- **Repository-side contract** (`opensource-lakehouse` from `42de0f3`):
+- **Repository-side contract** (`opensource-lakehouse-sample-dp` from `42de0f3`):
   - `notebooks/common/config_loader.py` provides `load_environment_config(environment, config_dir, product)`; configs are repository-owned and free-form, every key reaches the job; `configs/<product>/<env>.yml` is used in Airflow only.
   - Entry points accept `--environment` and `--config-dir`; `notebooks.common.job_runtime.start_spark_job(app_name)` returns `(spark, config)` through the platform's `lakehouse_spark` (see `workload-python-environment.md`).
   - Task arguments: `notebooks.common.cli.parse_task_args(declaration)`; names map to options (`scale_factor` → `--scale-factor`, `--opt value` or `--opt=value`); spec `required` or a string `default`; values are strings, never checked by the parser; structural problems are reported together with the usage and exit 2 (Airflow) or raise `TaskArgumentError` (Jupyter). In Jupyter the values come from the notebook's widgets (`notebooks/common/jupyter_input_widget_helper.py`, from `WIDGET_LIST`), else its `TASK_ARGS`; `task_args()` returns the raw list.
-  - Notebooks in `notebooks/workload/` have the sections Initialization (`# !lakehouse-install-requirements ~/work/opensource-lakehouse`, `# %run ../common/jupyter_environment_resolver.py`), Imports, their own sections, and Execution (only the `if __name__ == "__main__":` block, so importing a notebook runs nothing). The resolver uses `dev` unless `LAKEHOUSE_ENVIRONMENT` is `uat` or `prod`, and names the Spark application `<env>-<notebook>`.
+  - `opensource-lakehouse-sample-dp` (from `f8c13e0`) uses subproject `sample`: `workflows/sample/`, notebooks in `notebooks/workload/sample/other/`, entry points `other/<file>.py`; its AGENTS.md describes the subproject and layer layout.
+  - Notebooks have the sections Initialization (`# !lakehouse-install-requirements ~/work/opensource-lakehouse-sample-dp`, `# %run ../../../common/jupyter_environment_resolver.py` from a layer folder), Imports, their own sections, and Execution (only the `if __name__ == "__main__":` block, so importing a notebook runs nothing). The resolver uses `dev` unless `LAKEHOUSE_ENVIRONMENT` is `uat` or `prod`, and names the Spark application `<env>-<notebook>`.
 
 ## Failure behavior
 - **Invalid workflow**: an import error naming every problem; the bundle has no DAGs until it's fixed.
@@ -83,6 +84,7 @@ Current functional design of the platform component that turns data product repo
   - 49 passed in the Airflow image (golden DAG, platform-only callables, no templating, ported container, broker and cleanup tests, P2);
   - workload repository 36 passed (P5);
   - live: both `default` DAGs built from the stub with unchanged IDs, a UAT run 7 of 7 (after one transient failure), and Jenkins `default_ci` with the validation stage.
+- **Verified 2026-11-11 (workflow subprojects)**: host 547 and Airflow image 71 passed (P5: round-trip of mixed flat and subproject repositories; layer entry points); flat, subproject and `other/` layouts each loaded the same four DAGs; UAT 8/8 and 13/13 on `1b83568` and `f8c13e0`; Jenkins `default_ci` #11 and #12.
 - **Verified 2026-11-10 (Spark session helper)**: UAT runs on `ad1ca8d`, `41ee812`, `42de0f3` (8/8, 13/13 each; `--entity` through `parse_task_args`; application `uat-test_environment`); Jenkins `default_ci` for each.
 - **User-confirmed after closure (2026-11-10)**: an interactive JupyterHub run of the notebooks on the new image.
 - **Not run**: a production run; a CI refusal on a pushed invalid branch.

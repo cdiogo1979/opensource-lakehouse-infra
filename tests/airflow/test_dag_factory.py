@@ -319,3 +319,27 @@ def test_p2_the_task_graph_follows_runs_after_and_cleanup_comes_last(tmp_path_fa
         assert submit.op_kwargs["args"] == list(task.args)
     assert dag.get_task("validate_environment").upstream_task_ids == {"install_requirements"}
     assert dag.get_task("install_requirements").upstream_task_ids == {"create_cluster"}
+
+
+def test_a_subproject_task_runs_its_entrypoint_from_the_subproject_folder():
+    """workflow-subprojects FR-2, FR-3: the DAG ID stays <bundle>-<name>; the code comes from notebooks/workload/<project>/."""
+    workflow, problems = spec.parse_workflow(json.dumps(GOLDEN), "workflows/sample/test_environment.json", project="sample")
+    assert problems == []
+    dag = factory.build_dag(workflow, Path("/opt/airflow/dag_bundles/default-uat/tracking_repo"), IDENTITY)
+    assert dag.dag_id == "default-uat-test_environment"
+    submit = dag.get_task("submit_count_sample_rows")
+    assert submit.op_kwargs["entrypoint"] == "sample/count_sample_rows.py"
+    command = factory.submit_command(submit.op_kwargs["entrypoint"], "uat", "local[*]")
+    assert command[3] == "/opt/lakehouse-bundle/notebooks/workload/sample/count_sample_rows.py"
+
+
+def test_a_layer_entrypoint_runs_from_the_subproject_layer_folder():
+    """CR-1: entrypoint "<layer>/<file>.py" runs notebooks/workload/<project>/<layer>/<file>.py."""
+    document = json.loads(json.dumps(GOLDEN))
+    for task in document["tasks"]:
+        task["entrypoint"] = "ops/" + task["entrypoint"]
+    workflow, problems = spec.parse_workflow(json.dumps(document), "workflows/sample/test_environment.json", project="sample")
+    assert problems == []
+    submit = factory.build_dag(workflow, Path("/opt/airflow/dag_bundles/default-uat/tracking_repo"), IDENTITY).get_task("submit_count_sample_rows")
+    command = factory.submit_command(submit.op_kwargs["entrypoint"], "uat", "local[*]")
+    assert command[3] == "/opt/lakehouse-bundle/notebooks/workload/sample/ops/count_sample_rows.py"
