@@ -53,6 +53,9 @@ def validate() -> None:
 
 def stage(source: Path, target: Path) -> None:
     """Copy into the host-private mount directory for the ldap container."""
+    if target.is_file() and not target.is_symlink() and target.read_bytes() == source.read_bytes():
+        os.chmod(target, 0o644)  # unchanged: keep the inode that running containers mount
+        return
     descriptor, temporary = tempfile.mkstemp(prefix=f".{target.name}.", dir=MOUNTS)
     with os.fdopen(descriptor, "wb") as stream:
         stream.write(source.read_bytes())

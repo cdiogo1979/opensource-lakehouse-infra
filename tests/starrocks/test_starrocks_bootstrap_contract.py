@@ -211,3 +211,19 @@ def test_user_reconcile_re_applies_the_bind_pattern_after_its_safety_checks():
     main = source[source.index("def main("):]
     assert main.index("missing_managed_roles(runner)") < main.index("sr.ensure_ldap_login(runner)") < main.index("plan_users(read_starrocks_users(runner)")
     assert main.index("if args.bind_pattern_only:") < main.index("sr.require_products()")
+
+
+def test_product_writers_log_in_with_tokens_and_people_with_ldap():
+    """mv-promotion: writers are created with token login; a writer on LDAP is switched in place, people stay on LDAP."""
+    writers = reconcile.token_users()
+    assert "srv-default-writer" in writers
+    desired = {"srv-default-writer": frozenset({"role_default_writer"}), "joe-developer": frozenset({"role_default_developer"})}
+    sql = [s for s, _ in reconcile.render_plan(reconcile.plan_users({}, desired, writers))]
+    jwt = [s for s in sql if "authentication_jwt" in s]
+    assert len(jwt) == 1 and jwt[0].startswith("CREATE USER IF NOT EXISTS 'srv-default-writer'@'%' IDENTIFIED WITH authentication_jwt AS ")
+    assert '"principal_field": "preferred_username"' in jwt[0] and sr.JWT_ISSUER in jwt[0] and sr.JWT_JWKS_URL in jwt[0]
+    assert "CREATE USER IF NOT EXISTS 'joe-developer'@'%' IDENTIFIED WITH authentication_ldap_simple;" in sql
+    current = {"srv-default-writer": reconcile.UserState("srv-default-writer", reconcile.LDAP_PLUGIN, frozenset({"role_default_writer"}))}
+    plan = reconcile.plan_users(current, {"srv-default-writer": frozenset({"role_default_writer"})}, writers)
+    assert plan.switch == ["srv-default-writer"] and not plan.create and not plan.drop
+    assert reconcile.render_plan(plan)[0][1] == "switch srv-default-writer to token login"

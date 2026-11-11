@@ -128,6 +128,10 @@ def stage_readonly_mount(name: str, mode: int = 0o644) -> None:
     destination = CONTAINER_MOUNTS / name
     if source.is_symlink() or not source.is_file() or not os.access(source, os.R_OK):
         raise RuntimeError(f"Required provider file is unavailable: {name}")
+    if destination.is_file() and not destination.is_symlink() and destination.read_bytes() == source.read_bytes():
+        # Unchanged: keep the file (and its inode), so running containers' file mounts stay valid.
+        destination.chmod(mode)
+        return
 
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{name}.", dir=CONTAINER_MOUNTS)
     temporary = Path(temporary_name)

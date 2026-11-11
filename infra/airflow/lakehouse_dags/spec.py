@@ -5,7 +5,9 @@ product repository holds ``workflows/<name>.json`` (one DAG each) with its code 
 ``notebooks/workload/``, or per subproject ``workflows/<project>/<name>.json`` with
 its code in ``notebooks/workload/<project>/`` (notebooks optionally in the layer
 folders ``bronze``, ``silver``, ``gold``, ``ops``, ``deploy``, ``other``), and the stub
-``dags/lakehouse.py`` (``STUB_TEXT``).
+``dags/lakehouse.py`` (``STUB_TEXT``). It may also declare StarRocks materialized views,
+one statement per ``materialized_views/<project>/<name>.sql``, which the platform deploys
+as the product's writer (``mv_deploy``).
 """
 
 from __future__ import annotations
@@ -42,6 +44,15 @@ TASK_KEYS = {"name", "entrypoint", "runs_after", "args", "retries", "retry_delay
 MAX_TASKS = 50
 MAX_TAGS = 10
 MAX_ARGS = 50
+# Materialized views: materialized_views/<project>/<name>.sql, one CREATE statement each.
+MV_DIR = "materialized_views"
+MV_NAME = re.compile(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)*")  # no "__": the deployer reserves <name>__lakehouse_new
+MV_NAME_MAX = 60
+MV_PLACEHOLDERS = ("${catalog}", "${namespace}", "${mv_database}")
+MV_MAX_BYTES = 100_000
+# The platform builds <bundle>-deploy_materialized_views when a repository declares MVs.
+RESERVED_WORKFLOW_NAMES = frozenset({"deploy_materialized_views"})
+_MV_HEAD = re.compile(r"CREATE\s+MATERIALIZED\s+VIEW\s+\$\{mv_database\}\.([A-Za-z0-9_]+)\s", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -250,6 +261,79 @@ def to_document(workflow: Workflow) -> dict[str, Any]:
     return document
 
 
+@dataclass(frozen=True)
+class MaterializedView:
+    name: str
+    project: str
+    path: str
+    statement: str  # with the placeholders, leading comment lines and a trailing ";" removed
+
+
+def parse_materialized_view(text: str, path: str, name: str, project: str) -> tuple[MaterializedView | None, list[Problem]]:
+    """One MV definition file: ``CREATE MATERIALIZED VIEW ${mv_database}.<name> ...``, nothing else."""
+    problems: list[Problem] = []
+    if not MV_NAME.fullmatch(name) or len(name) > MV_NAME_MAX:
+        problems.append(Problem(path, "", f"the file name must be an MV name: lowercase letters, digits and single _, at most {MV_NAME_MAX} characters"))
+    lines = text.replace("\r\n", "\n").split("\n")
+    while lines and (not lines[0].strip() or lines[0].lstrip().startswith("--")):
+        lines.pop(0)
+    statement = "\n".join(lines).strip()
+    if statement.endswith(";"):
+        statement = statement[:-1].rstrip()
+    head = _MV_HEAD.match(statement + " ")
+    if head is None:
+        problems.append(Problem(path, "", "must hold one CREATE MATERIALIZED VIEW ${mv_database}.<name> statement"))
+    elif head.group(1) != name:
+        problems.append(Problem(path, "", f"creates {head.group(1)!r}, but the file name says {name!r}"))
+    if ";" in statement:
+        problems.append(Problem(path, "", "holds more than one statement (a ';' before the end)"))
+    unknown = sorted(set(re.findall(r"\$\{[^}]*\}", statement)) - set(MV_PLACEHOLDERS))
+    if unknown:
+        problems.append(Problem(path, "", f"uses unknown placeholders {', '.join(unknown)}; only {', '.join(MV_PLACEHOLDERS)} are filled in"))
+    if len(text.encode("utf-8")) > MV_MAX_BYTES:
+        problems.append(Problem(path, "", f"is larger than {MV_MAX_BYTES} bytes"))
+    return (None if problems else MaterializedView(name, project, path, statement)), problems
+
+
+def load_materialized_views(root: Path) -> tuple[list[MaterializedView], list[Problem]]:
+    """Every MV definition of a repository checkout, or the problems that block them; names are unique."""
+    directory = root / MV_DIR
+    if not directory.is_dir():
+        return [], []
+    views: list[MaterializedView] = []
+    problems: list[Problem] = []
+    seen: dict[str, str] = {}
+    for folder in sorted(directory.iterdir()):
+        relative = folder.relative_to(root).as_posix()
+        if _hidden(folder):
+            continue
+        if not folder.is_dir() or not PROJECT.fullmatch(folder.name):
+            problems.append(Problem(relative, "", f"{MV_DIR}/ holds only subproject folders (materialized_views/<project>/<name>.sql)"))
+            continue
+        for path in sorted(folder.iterdir()):
+            where = path.relative_to(root).as_posix()
+            if _hidden(path):
+                continue
+            if not path.is_file() or path.suffix != ".sql":
+                problems.append(Problem(where, "", f"only *.sql files belong in {MV_DIR}/{folder.name}/"))
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                problems.append(Problem(where, "", "cannot be read as UTF-8 text"))
+                continue
+            view, found = parse_materialized_view(text, where, path.stem, folder.name)
+            problems += found
+            if view is None:
+                continue
+            if view.name in seen:
+                problems.append(Problem(where, "", f"is also defined by {seen[view.name]}; MV names are unique across subprojects"))
+                continue
+            seen[view.name] = where
+            views.append(view)
+    return views, problems
+
+
 def _hidden(path: Path) -> bool:
     return path.name.startswith(".") or path.name == "__pycache__"
 
@@ -297,6 +381,9 @@ def load_repository(root: Path) -> tuple[list[Workflow], list[Problem]]:
         problems += found
         if workflow is None:
             continue
+        if workflow.name in RESERVED_WORKFLOW_NAMES:
+            problems.append(Problem(relative, "name", f"{workflow.name!r} is reserved for the platform's DAG"))
+            continue
         if workflow.name in seen:
             problems.append(Problem(relative, "name", f"is also used by {seen[workflow.name]}; workflow names are unique across subprojects"))
             continue
@@ -306,8 +393,9 @@ def load_repository(root: Path) -> tuple[list[Workflow], list[Problem]]:
 
 
 def check_repository(root: Path) -> tuple[list[Workflow], list[Problem]]:
-    """The CI check: the workflows, the exact stub, and nothing else in dags/ (BR-10)."""
+    """The CI check: the workflows, the materialized views, the exact stub, and nothing else in dags/ (BR-10)."""
     workflows, problems = load_repository(root)
+    problems += load_materialized_views(root)[1]
     stub = root / STUB_PATH
     if not stub.is_file():
         problems.append(Problem(STUB_PATH.as_posix(), "", "is missing; copy the platform stub"))

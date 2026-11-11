@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 
 CLASSPATH = "airflow.providers.git.bundles.git.GitDagBundle"
 NAME = re.compile(r"^(?P<product>[a-z][a-z0-9]{1,19})-(?P<env>main|uat)$")
-FIXED_KWARGS = {"git_conn_id": "lakehouse_git", "refresh_interval": 300, "sparse_dirs": ["dags", "workflows", "notebooks", "configs"], "subdir": "dags"}
+FIXED_KWARGS = {"git_conn_id": "lakehouse_git", "refresh_interval": 300, "sparse_dirs": ["dags", "workflows", "notebooks", "configs", "materialized_views"], "subdir": "dags"}
 
 
 def fail(message: str) -> None:

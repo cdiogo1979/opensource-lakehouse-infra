@@ -10,4 +10,4 @@ docker run --rm --network bridge --entrypoint sh -v "$PWD:/src:ro" -w /src \
   -e PYTHONDONTWRITEBYTECODE=1 -e HOME=/tmp -e AIRFLOW__CORE__LOAD_EXAMPLES=False "$image" -c '
     pip install --quiet --disable-pip-version-check --target /tmp/deps pytest hypothesis >/dev/null &&
     PYTHONPATH=/tmp/deps:/src/infra/airflow python -m pytest -q -p no:cacheprovider \
-      tests/airflow/test_dag_factory.py tests/airflow/test_workflow_spec.py "$@"' sh "$@"
+      tests/airflow/test_dag_factory.py tests/airflow/test_workflow_spec.py tests/airflow/test_mv_promotion.py tests/airflow/test_task_args.py "$@"' sh "$@"

@@ -29,6 +29,7 @@ from airflow.exceptions import AirflowException
 from airflow.providers.standard.operators.python import PythonOperator
 from airflow.task.trigger_rule import TriggerRule
 
+from . import mv_deploy
 from .identity import Identity
 from .redact import redact_spark_output
 from .spec import Workflow
@@ -46,6 +47,8 @@ WORKLOAD_PYTHON_LOCK = "/opt/lakehouse/requirements.lock"
 INSTALL_RETRIES = 2
 INSTALL_RETRY_DELAY = timedelta(seconds=30)
 LOGGER = logging.getLogger(__name__)
+MV_DAG_NAME = "deploy_materialized_views"
+MV_TASK_ID = "deploy_materialized_views"
 # Runs inside the Spark container with the repository's own loader (BR-6).
 VALIDATE_SNIPPET = (
     "import sys; sys.path.insert(0, '/opt/lakehouse-bundle/notebooks/common'); "
@@ -341,6 +344,83 @@ def _stop_spark_container(docker_url: str, **context: object) -> None:
         raise AirflowException("Airflow writer-run cleanup was incomplete; broker expiry remains the fallback.")
 
 
+def _mv_placement(product: str, environment: str) -> tuple[mv_deploy.Placement, str]:
+    """The environment's catalog, namespace and MV database, and the writer's username, from the product file."""
+    import data_products  # mounted next to lakehouse_dags in the scheduler
+
+    model = data_products.load_product(Path(os.environ.get("LAKEHOUSE_DATA_PRODUCTS_DIR", "/opt/airflow/data-products")) / f"{product}.yaml")
+    env = next((e for e in model.environments if e.key == environment), None)
+    if env is None:
+        raise AirflowException(f"Product {product} has no {environment} environment.")
+    return mv_deploy.Placement(env.catalog, env.namespace, env.mv_database), model.writer_user.username
+
+
+def _deploy_materialized_views(views: Mapping[str, str], product: str, environment: str, revoke: bool = False, **context: object) -> None:
+    """Make the environment's MV database match the bundle's ``materialized_views/`` as the product writer (mv-promotion).
+
+    The writer's Keycloak token comes from the broker (registering this run is idempotent),
+    is used only for the StarRocks login, and never reaches product code or the logs.
+    """
+    if os.environ.get("STARROCKS_ENABLED", "true").lower() == "false":
+        LOGGER.warning("StarRocks is disabled; %d materialized view(s) not deployed.", len(views))
+        return
+    placement, writer = _mv_placement(product, environment)
+    rendered = {name: mv_deploy.render(statement, placement) for name, statement in views.items()}
+    control_token = _read_broker_control_token()
+    registration = _broker_request("POST", "/v1/runs", {"dag_id": context["dag"].dag_id, "run_id": str(context["run_id"])}, control_token)
+    token = registration.get("access_token") if isinstance(registration, dict) else None
+    run_handle = registration.get("run_handle") if isinstance(registration, dict) else None
+    try:
+        if not isinstance(token, str) or not token:
+            raise AirflowException("The token broker returned no writer token for the MV deploy.")
+        try:
+            connection = mv_deploy.connect(
+                os.environ.get("LAKEHOUSE_STARROCKS_HOST", "starrocks-fe"),
+                int(os.environ.get("LAKEHOUSE_STARROCKS_PORT", "9030")),
+                writer,
+                token,
+                os.environ.get("LAKEHOUSE_STARROCKS_CA", "/run/certs/starrocks-ca.crt"),
+            )
+        except Exception as error:
+            raise AirflowException(f"StarRocks login as {writer} failed: {redact_spark_output(str(error))}") from None
+        try:
+            report = mv_deploy.apply(connection.cursor(), placement.mv_database, rendered, LOGGER)
+        finally:
+            connection.close()
+    finally:
+        if revoke and isinstance(run_handle, str) and run_handle:
+            try:
+                _broker_request("DELETE", f"/v1/runs/{quote(run_handle, safe='')}", None, control_token)
+            except AirflowException:
+                LOGGER.warning("Broker run revocation failed after the MV deploy; bounded expiry remains active.")
+    LOGGER.info(
+        "Materialized views in %s: created %s, replaced %s, dropped %s, unchanged %s, skipped (source table missing) %s, made by hand %s, failed %s",
+        placement.mv_database, report.created, report.replaced, report.dropped, report.unchanged, report.skipped, report.foreign, report.failed,
+    )
+    if report.failed:
+        raise AirflowException(f"Materialized views failed to deploy: {', '.join(report.failed)}.")
+
+
+def build_mv_dag(views: Mapping[str, str], identity: Identity) -> DAG:
+    """``<bundle>-deploy_materialized_views``: deploy the bundle's MVs on demand."""
+    dag = DAG(
+        dag_id=f"{identity.bundle}-{MV_DAG_NAME}",
+        description=f"Deploy {len(views)} materialized view(s) of {identity.bundle} to StarRocks as the product writer.",
+        start_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        schedule=None,
+        catchup=False,
+        tags=[identity.bundle, "materialized-views"],
+        rerun_with_latest_version=False,
+    )
+    LakehouseOperator(
+        task_id=MV_TASK_ID,
+        python_callable=_deploy_materialized_views,
+        op_kwargs={"views": dict(views), "product": identity.product, "environment": identity.environment, "revoke": True},
+        dag=dag,
+    )
+    return dag
+
+
 def _verify_workloads_succeeded() -> None:
     """An all-success leaf after every workload and the cleanup task."""
 
@@ -379,8 +459,8 @@ def _task_options(task) -> dict[str, Any]:
     return options
 
 
-def build_dag(workflow: Workflow, bundle_root: Path, identity: Identity) -> DAG:
-    """The DAG for one validated workflow of a product bundle checkout."""
+def build_dag(workflow: Workflow, bundle_root: Path, identity: Identity, views: Mapping[str, str] | None = None) -> DAG:
+    """The DAG for one validated workflow of a product bundle checkout; ``views`` are the bundle's MVs (name to statement)."""
     docker_url = os.environ.get("LAKEHOUSE_DOCKER_URL", "unix://var/run/docker.sock")
     docker_network = os.environ.get("LAKEHOUSE_SPARK_DOCKER_NETWORK")
     broker_ca_host_path = os.environ.get("LAKEHOUSE_BROKER_CA_HOST_PATH", "")
@@ -438,6 +518,16 @@ def build_dag(workflow: Workflow, bundle_root: Path, identity: Identity) -> DAG:
         )
         for task in workflow.tasks
     }
+    deploy_views = (
+        LakehouseOperator(
+            task_id=MV_TASK_ID,
+            python_callable=_deploy_materialized_views,
+            op_kwargs={"views": dict(views), "product": identity.product, "environment": identity.environment},
+            dag=dag,
+        )
+        if views
+        else None
+    )
     stop_cluster = LakehouseOperator(
         task_id="stop_cluster",
         python_callable=_stop_spark_container,
@@ -448,12 +538,17 @@ def build_dag(workflow: Workflow, bundle_root: Path, identity: Identity) -> DAG:
     verify = LakehouseOperator(task_id="verify_workloads_succeeded", python_callable=_verify_workloads_succeeded, dag=dag)
 
     create_cluster >> install_requirements >> validate_environment
+    first = validate_environment
+    if deploy_views is not None:
+        validate_environment >> deploy_views
+        deploy_views >> stop_cluster
+        first = deploy_views
     for task in workflow.tasks:
         submit = submits[task.name]
         for predecessor in task.runs_after or ():
             submits[predecessor] >> submit
         if not task.runs_after:
-            validate_environment >> submit
+            first >> submit
         submit >> stop_cluster
         submit >> verify
     stop_cluster >> verify

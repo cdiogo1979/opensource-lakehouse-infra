@@ -1,4 +1,4 @@
-"""Check a product repository's workflows and stub (BR-10).
+"""Check a product repository's workflows, materialized views and stub (BR-10).
 
   python3 -m lakehouse_dags.validate [REPOSITORY_ROOT]
 
@@ -10,7 +10,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from .spec import check_repository
+from .spec import check_repository, load_materialized_views
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -28,7 +28,8 @@ def main(argv: list[str] | None = None) -> int:
     if problems:
         print(f"{len(problems)} problem(s)")
         return 1
-    print(f"OK: {len(workflows)} workflow(s)")
+    views = len(load_materialized_views(root)[0])
+    print(f"OK: {len(workflows)} workflow(s)" + (f", {views} materialized view(s)" if views else ""))
     return 0
 
 

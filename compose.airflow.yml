@@ -133,8 +133,15 @@ services:
     environment:
       <<: *airflow-environment
       PYTHONPATH: /opt/lakehouse/python
+      # The MV deploy (mv-promotion) reads each product's catalogs and MV databases from
+      # the product files and logs in to StarRocks over TLS as the product writer.
+      LAKEHOUSE_DATA_PRODUCTS_DIR: /opt/airflow/data-products
+      STARROCKS_ENABLED: ${STARROCKS_ENABLED:-true}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./infra/products/data_products.py:/opt/lakehouse/python/data_products.py:ro
+      - ./data-products:/opt/airflow/data-products:ro
+      - ./.runtime/container-mounts/starrocks-ca.crt:/run/certs/starrocks-ca.crt:ro
       - ${LAKEHOUSE_BUNDLE_HOST_ROOT:?Set by scripts/lakehouse.sh}:${LAKEHOUSE_BUNDLE_CONTAINER_ROOT:-/opt/airflow/dag_bundles}
       - ${LAKEHOUSE_BROKER_CA_HOST_PATH:?Set by scripts/lakehouse.sh}:/run/certs/airflow-token-broker-ca.crt:ro
       # Staged checkpoint keys: the factory checks the run's key here and mounts only that file.

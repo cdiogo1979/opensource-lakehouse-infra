@@ -13,10 +13,9 @@ Use your username and password, the same as for Keycloak sign-in. StarRocks chec
 ```sh
 ./scripts/clients/starrocks-login.sh joe-developer                  # asks for the password
 ./scripts/clients/starrocks-login.sh maria-owner -e "SHOW CATALOGS"
-./scripts/clients/starrocks-login.sh --password-file ~/.srv-pw srv-default-writer -e "SELECT 1"
 ```
 
-Service users (`srv-*-writer`) log in the same way, with the password in their file under `.runtime/credentials/`. The emergency admin account is `root`, with the password in `.runtime/credentials/starrocks-root-password`. Avoid it for normal work, because it bypasses the role model.
+Product writers (`srv-<product>-writer`) don't log in with a password: their StarRocks users use **token login** (`authentication_jwt`, Keycloak's keys and issuer, the token's `preferred_username`), so only the platform's materialized-view deploy, holding a broker-issued writer token, logs in as them. The reconciler keeps writers on token login and everyone else on LDAP, switching a user in place (grants and owned views kept) if it is on the wrong one. The emergency admin account is `root`, with the password in `.runtime/credentials/starrocks-root-password`. Avoid it for normal work, because it bypasses the role model.
 
 ## DBeaver and other JDBC clients
 
@@ -51,7 +50,7 @@ Optional:
   - `role_platform_admin` manages the whole catalogs
   - every product role with access to a catalog also reads that catalog's `information_schema` (filtered by its own privileges), which SQL clients use to list tables
 - **MV databases** (one per product and environment, levels from the file; for `default`):
-  - the writer creates, refreshes, and drops materialized views in all three
+  - the writer creates, refreshes, and drops materialized views in all three; in UAT and production the platform deploys the product repository's declared views as the writer ([promotion](data-products.md#promoting-materialized-views))
   - developers do the same in dev, and read production and UAT
   - analysts read production
   - owners and platform admins manage them

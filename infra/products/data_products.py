@@ -95,7 +95,7 @@ BUNDLE_ENVIRONMENTS = (("main", "prod_branch"), ("uat", "uat_branch"))
 BUNDLE_CLASSPATH = "airflow.providers.git.bundles.git.GitDagBundle"
 # subdir: Airflow looks for DAG files only in dags/ (the stub), never in the repository's
 # notebooks/ or other code; the stub still reads workflows/ from the whole checkout.
-BUNDLE_KWARGS = {"git_conn_id": "lakehouse_git", "refresh_interval": 300, "sparse_dirs": ["dags", "workflows", "notebooks", "configs"], "subdir": "dags"}
+BUNDLE_KWARGS = {"git_conn_id": "lakehouse_git", "refresh_interval": 300, "sparse_dirs": ["dags", "workflows", "notebooks", "configs", "materialized_views"], "subdir": "dags"}
 # DAG IDs start with their bundle name, so the product (and its writer) follows from the ID.
 DAG_ID_PATTERN = re.compile(r"^(?P<product>[a-z][a-z0-9]{1,19})-(?P<env>main|uat)-(?P<workload>.+)$")
 BRANCH_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$")

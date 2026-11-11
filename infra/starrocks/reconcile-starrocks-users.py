@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Synchronize StarRocks LDAP-login users and role grants with Keycloak product groups.
 
-Every Keycloak user in a product group gets a StarRocks user that logs in with
-its own username and LDAP password (`authentication_ldap_simple`, over TLS),
-holding exactly the managed roles of its groups as default roles. Platform admins
-also get the built-in admin roles. Users of the former token login (JWT) are
-switched in place, keeping their grants and objects. Managed users who left every
+Every Keycloak user in a product group gets a StarRocks user holding exactly the
+managed roles of its groups as default roles. People log in with their username and
+LDAP password (`authentication_ldap_simple`, over TLS); each product's writer user
+logs in with its Keycloak access token (`authentication_jwt`), as the platform's
+materialized-view deployer does. Platform admins also get the built-in admin roles.
+A user on the wrong login method is switched in place, keeping its grants and the
+materialized views it owns. Managed users who left every
 product group are dropped. Root, built-in users, and native-password users are
 never changed. If Keycloak cannot be read, or returns no product-group members,
 nothing is applied.
@@ -30,8 +32,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import starrocks_common as sr  # noqa: E402
 
 REALM = "lakehouse"
-# Users log in with their LDAP password (the FE binds as uid=<user>,ou=people);
-# JWT users from the former token login are switched in place.
+# People log in with their LDAP password (the FE binds as uid=<user>,ou=people);
+# product writers with their Keycloak token. Either is switched in place when wrong.
 LDAP_PLUGIN = "AUTHENTICATION_LDAP_SIMPLE"
 JWT_PLUGIN = "AUTHENTICATION_JWT"
 MANAGED_PLUGINS = frozenset({LDAP_PLUGIN, JWT_PLUGIN})
@@ -54,6 +56,10 @@ class UserPlan:
     drop: list[str] = field(default_factory=list)
     conflicts: list[str] = field(default_factory=list)
     switch: list[str] = field(default_factory=list)
+    token_users: frozenset[str] = frozenset()
+
+    def plugin_for(self, name: str) -> str:
+        return JWT_PLUGIN if name in self.token_users else LDAP_PLUGIN
 
     def is_empty(self) -> bool:
         return not (self.create or self.switch or self.grant or self.revoke or self.defaults or self.drop)
@@ -76,9 +82,12 @@ def desired_users(memberships: dict[str, set[str]]) -> dict[str, frozenset[str]]
     return desired
 
 
-def plan_users(current: dict[str, UserState], desired: dict[str, frozenset[str]]) -> UserPlan:
-    """Changes that make managed (LDAP, or former JWT) users match the desired users (SR-14, SR-16, BR-3)."""
-    plan = UserPlan()
+def plan_users(current: dict[str, UserState], desired: dict[str, frozenset[str]], token_users: frozenset[str] = frozenset()) -> UserPlan:
+    """Changes that make managed users match the desired users and login methods (SR-14, SR-16, BR-3).
+
+    ``token_users`` (the product writers) log in with a Keycloak token; everyone else with LDAP.
+    """
+    plan = UserPlan(token_users=frozenset(token_users))
     for name in sorted(desired):
         roles = desired[name]
         state = current.get(name)
@@ -90,7 +99,7 @@ def plan_users(current: dict[str, UserState], desired: dict[str, frozenset[str]]
         if state.plugin not in MANAGED_PLUGINS:
             plan.conflicts.append(name)
             continue
-        if state.plugin == JWT_PLUGIN:
+        if state.plugin != plan.plugin_for(name):
             plan.switch.append(name)
         missing = sorted(roles - state.roles)
         extra = sorted((state.roles & GRANTABLE_ROLES) - roles)
@@ -106,10 +115,11 @@ def render_plan(plan: UserPlan) -> list[tuple[str, str]]:
     """(SQL, operation) in apply order: create, switch, grant, revoke, default roles, drop."""
     statements: list[tuple[str, str]] = []
     for name, _roles in plan.create:
-        statements.append((f"CREATE USER IF NOT EXISTS {sr.user_identity(name)} IDENTIFIED WITH authentication_ldap_simple;", f"create user {name}"))
+        statements.append((f"CREATE USER IF NOT EXISTS {sr.user_identity(name)} {login_clause(plan.plugin_for(name))};", f"create user {name}"))
     for name in plan.switch:
         # ALTER keeps the user's grants and the objects it owns (materialized views).
-        statements.append((f"ALTER USER {sr.user_identity(name)} IDENTIFIED WITH authentication_ldap_simple;", f"switch {name} to LDAP login"))
+        target = "token" if plan.plugin_for(name) == JWT_PLUGIN else "LDAP"
+        statements.append((f"ALTER USER {sr.user_identity(name)} {login_clause(plan.plugin_for(name))};", f"switch {name} to {target} login"))
     for name, role in plan.grant:
         statements.append((f"GRANT {sr.quote_identifier(role)} TO USER {sr.user_identity(name)};", f"grant {role} to {name}"))
     for name, role in plan.revoke:
@@ -119,6 +129,19 @@ def render_plan(plan: UserPlan) -> list[tuple[str, str]]:
     for name in plan.drop:
         statements.append((f"DROP USER {sr.user_identity(name)};", f"drop user {name}"))
     return statements
+
+
+def login_clause(plugin: str) -> str:
+    """``IDENTIFIED WITH ...`` for a login method: LDAP, or a Keycloak token checked against the realm keys."""
+    if plugin == JWT_PLUGIN:
+        settings = {"jwks_url": sr.JWT_JWKS_URL, "principal_field": "preferred_username", "required_issuer": sr.JWT_ISSUER}
+        return f"IDENTIFIED WITH authentication_jwt AS {sr.quote_literal(json.dumps(settings, sort_keys=True))}"
+    return "IDENTIFIED WITH authentication_ldap_simple"
+
+
+def token_users() -> frozenset[str]:
+    """The product writers' usernames: they log in with tokens."""
+    return frozenset(product.writer_user.username for product in sr.PRODUCTS)
 
 
 # ---- Keycloak ----
@@ -266,7 +289,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         if not args.dry_run and sr.ensure_ldap_login(runner) == "set":
             print("StarRocks LDAP bind pattern was missing (FE restart) and is set again.")
-        plan = plan_users(read_starrocks_users(runner), desired)
+        plan = plan_users(read_starrocks_users(runner), desired, token_users())
         if not args.dry_run:
             for sql, operation in render_plan(plan):
                 runner.execute(sql, operation)
@@ -274,10 +297,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: StarRocks user reconcile failed: {error}", file=sys.stderr)
         return 1
     for name in plan.conflicts:
-        print(f"WARNING: StarRocks user {name} exists without JWT authentication; left unchanged.")
+        print(f"WARNING: StarRocks user {name} exists with an unmanaged login method; left unchanged.")
     suffix = " (dry run; nothing changed)" if args.dry_run else ""
     print(
-        f"StarRocks users reconciled{suffix}: {len(desired)} desired; created {[n for n, _ in plan.create]}; switched to LDAP {plan.switch}; "
+        f"StarRocks users reconciled{suffix}: {len(desired)} desired; created {[n for n, _ in plan.create]}; switched login {plan.switch}; "
         f"{len(plan.grant)} grant(s), {len(plan.revoke)} revoke(s); dropped {plan.drop}."
     )
     return 0

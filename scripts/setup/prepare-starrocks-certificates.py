@@ -54,6 +54,10 @@ def validate() -> None:
 
 def stage_password_mount() -> None:
     """Copy the keystore password beside the keystore for the FE entrypoint (host-private parent)."""
+    target = KEYSTORE_PASSWORD_MOUNT
+    if target.is_file() and not target.is_symlink() and target.read_bytes() == KEYSTORE_PASSWORD.read_bytes():
+        os.chmod(target, 0o644)  # unchanged: keep the inode that running containers mount
+        return
     descriptor, temporary = tempfile.mkstemp(prefix=".starrocks-keystore-password.", dir=MOUNTS)
     with os.fdopen(descriptor, "wb") as stream:
         stream.write(KEYSTORE_PASSWORD.read_bytes())

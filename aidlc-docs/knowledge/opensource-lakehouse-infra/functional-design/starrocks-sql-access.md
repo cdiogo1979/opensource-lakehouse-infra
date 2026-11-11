@@ -62,7 +62,7 @@ Catalog properties:
 
 ## Users (`infra/starrocks/reconcile-starrocks-users.py`)
 - **Desired users**: every enabled Keycloak user in at least one group of any product file, except `service-account-*` users. Roles are the union of their groups' roles, plus the built-ins for platform admins.
-- **Managed users**: LDAP-login users (`AUTHENTICATION_LDAP_SIMPLE`), created with `IDENTIFIED WITH authentication_ldap_simple`. Users of the former token login (`AUTHENTICATION_JWT`) are **switched in place** with `ALTER USER … IDENTIFIED WITH authentication_ldap_simple`, which keeps their grants and the materialized views they own. Both plugins count as managed for drops.
+- **Managed users and login methods**: people log in with LDAP (`IDENTIFIED WITH authentication_ldap_simple`); each product's writer user (`writer_user.username`) logs in with its Keycloak access token (`IDENTIFIED WITH authentication_jwt AS '{"jwks_url": "http://keycloak:8080/realms/lakehouse/protocol/openid-connect/certs", "principal_field": "preferred_username", "required_issuer": "http://keycloak.localhost:8080/realms/lakehouse"}'`; `STARROCKS_JWT_JWKS_URL`, `KEYCLOAK_ISSUER` override). A user on the wrong method is **switched in place** with `ALTER USER … IDENTIFIED WITH …`, which keeps its grants and the materialized views it owns. Both plugins count as managed for drops.
 - **Apply order**: create, switch, grant, revoke, `SET DEFAULT ROLE ALL`, then drop managed users who left every product group. A native-password user with a desired name is a conflict: it is reported and left unchanged. `root` and built-in users are never managed.
 - **Bind pattern**: after its safety checks, every run re-applies the LDAP bind pattern if the FE lost it (an FE restart resets this runtime setting). `--bind-pattern-only` does only that, with the root login and no Keycloak read or product validation; the scheduled cycle runs it first (since 2026-11-11), so logins recover even while the user sync is refused.
 - **Safety**:
@@ -75,7 +75,7 @@ Catalog properties:
 - **MV authorship**: a dropped user's materialized views may stop refreshing; an owner or platform admin must re-create them.
 
 ## Login
-- **Method**: people and service users log in with their own username and LDAP password, the same password as for Keycloak. One StarRocks user has exactly one login method (probed), so the former token login was retired: the `starrocks` Keycloak client and `scripts/clients/starrocks-token.sh` are gone.
+- **Method**: people log in with their own username and LDAP password; product writers only with a Keycloak token (the materialized-view deploy; see `materialized-view-promotion.md`). People use the same password as for Keycloak. One StarRocks user has exactly one login method (probed), so the former token login was retired: the `starrocks` Keycloak client and `scripts/clients/starrocks-token.sh` are gone.
 - **TLS**: the FE serves the SQL port with a certificate from a local CA (SAN `starrocks-fe`, `localhost`, `127.0.0.1`), made by `scripts/setup/prepare-starrocks-certificates.py`. `ssl_force_secure_transport = true` refuses every plain-text connection, root included. This matters because the client sends the password in clear text inside the TLS session (`mysql_clear_password`).
 - **Password check**: the FE binds to LDAP over LDAPS (`ldap:636`, `ssl_conn_allow_insecure = false`, trust store `/run/certs/ldap-ca.crt`) as `uid=${USER},ou=people,dc=lakehouse,dc=local`, so StarRocks holds no LDAP credential.
   - **Where the pattern is set**: it is a runtime setting. `fe.conf` would expand `${USER}` as an environment variable ("no such env variable: USER") and the FE would refuse to start, so `bootstrap-starrocks.py --runtime-only` sets it at every start and the user sync re-applies it.
@@ -97,7 +97,7 @@ Catalog properties:
 - P3: grants equal the matrix for each role and environment.
 - P4: applying a grant plan covers the matrix and leaves unmanaged roles alone.
 - P5: desired users follow groups and exclude service accounts.
-- P6: applying a user plan leaves every desired user with LDAP login and exactly its roles; native-password users are never changed.
+- P6: applying a user plan leaves every desired user with its login method (token for writers, LDAP for people) and exactly its roles; native-password users are never changed (P2b re-plans to no switch).
 - P7: the catalog plan ignores the credential.
 - P8 (advisory): planning against the desired state is empty.
 - P9: a role holds the `information_schema` metadata grant on a catalog exactly when it holds `USAGE` there, only as `SELECT`, never on the database itself.
@@ -105,6 +105,8 @@ Catalog properties:
 The tests are in `tests/starrocks/`.
 
 ## Known limits and follow-ups
+- **Writers have no password login** (one login method per user, probe P1 of mv-promotion): use an owner account to inspect deployed views.
+- **Verified 2026-11-11 (MV promotion)**: the reconciler switched `srv-default-writer` to token login in place; the deploy logged in as it with a broker token over TLS.
 - **Verified 2026-11-11 (metadata access)**: 10 metadata grants applied for `default`, then converged; a developer lists tables in all three catalogs, an analyst in prod only (uat and dev refused); a role with only the metadata grant sees nothing of `default`; the user confirmed DBeaver.
 - **Resolved 2026-11-11**: a password login stayed broken after an FE restart because the scheduled reconciler refused every cycle (stale baked-in product model). The reconciler now runs mounted current code, restores the bind pattern first, and its container healthcheck reports unhealthy when no cycle fully succeeded within two intervals plus a minute (`lakehouse.sh status` shows `reconciler`).
 - A new product becomes readable through StarRocks within about five minutes. The catalogs cache the `srv-starrocks` token, and its new writer-group role arrives at the next token renewal (Keycloak access tokens last 300 s).

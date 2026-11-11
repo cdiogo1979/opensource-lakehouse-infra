@@ -83,6 +83,30 @@ What each bootstrap group can do in every app: [Identity — what each group can
 
 StarRocks materialized views (MVs) are part of query acceleration for **everyone**: StarRocks rewrites a query on the Iceberg tables to read a matching materialized view, so users keep querying the tables as usual and get faster answers. Each product and environment has an MV database in StarRocks' `default_catalog` (`default_lh`, `default_lhuat`, `default_lhdev` for `default`), with the levels from `materialized_views` above.
 
-- **Who authors them**: developers in dev, and the writer in every environment (from workloads); owners and platform admins manage them. See the [developer journey](../journeys/data-product-developer.md#7-accelerate-queries-with-materialized-views).
+- **Who authors them**: developers in dev, by hand; in UAT and production the platform deploys the views declared in the product repository, as the writer (below); owners and platform admins manage them. See the [developer journey](../journeys/data-product-developer.md#7-accelerate-queries-with-materialized-views).
 - **Who benefits**: every user whose query can be answered from a view they may read; see the [analyst journey](../journeys/data-analyst.md#4-faster-queries-through-materialized-views).
 - The rewrite behavior on this platform is to be verified by a follow-up intent.
+
+## Promoting materialized views
+
+Views reach UAT and production through the product repository, like code:
+
+1. **Develop and test in dev**: create the view by hand in your dev MV database (`default_lhdev` for `default`) over the dev tables, query it, and refresh it.
+2. **Declare it**: put the statement in `materialized_views/<project>/<name>.sql` (the file name is the view name), with `${mv_database}`, `${catalog}` and `${namespace}` where the dev names were:
+   ```sql
+   CREATE MATERIALIZED VIEW ${mv_database}.mv_tpch_day_nation_segment
+   COMMENT 'TPC-H sales per order date, customer region and nation, and market segment'
+   REFRESH ASYNC EVERY (INTERVAL 1 HOUR)
+   AS SELECT ... FROM ${catalog}.${namespace}.tpch_orders o JOIN ...
+   ```
+   CI (`lakehouse-validate-workflows`) checks each file: one `CREATE MATERIALIZED VIEW ${mv_database}.<file name>` statement, only those three placeholders, no other statement.
+3. **Merge to `uat`, then `main`**: every Airflow run of the bundle starts with `deploy_materialized_views`, before its tasks, and `<bundle>-deploy_materialized_views` runs it on demand. It fills the placeholders with the environment's values from the product file and, logged in as the product's writer:
+   - creates views that don't exist yet;
+   - replaces a changed view without a gap (the new one is created as `<name>__lakehouse_new` and swapped in, then the old one is dropped);
+   - drops views it deployed whose file is gone;
+   - leaves unchanged views, and views made by hand, alone;
+   - skips a view whose source table doesn't exist yet (a later run creates it).
+
+**Will StarRocks use a view to speed up a query?** Only for views made of selects, joins, filters and `GROUP BY` (no subqueries), only while the view is fresh, and only when the query's aggregates can be computed from the view's (a `SUM` per day rolls up to a year; a `COUNT(DISTINCT …)` per day doesn't). Check with `EXPLAIN <query>` (the view's name appears in the plan) and see why not with `TRACE LOGS MV <query>`. A view that doesn't qualify is still useful when queried by name. After a swap, StarRocks' trace may still list the temporary `<name>__lakehouse_new` as a related view of the base tables; the view itself is resolved correctly.
+
+Deployed views start their comment with `lakehouse-mv sha256=<digest>`; that marker is how the deploy tells its views from hand-made ones, so don't edit it. They belong to the writer, so they keep refreshing whoever leaves the product. The deploy logs what it created, replaced, dropped, skipped and left alone; a view that fails for another reason fails the task, after the others are done.

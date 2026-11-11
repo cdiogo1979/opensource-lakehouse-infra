@@ -182,7 +182,7 @@ def test_platform_wiring_mounts_the_package_read_only_where_it_is_used():
     assert mount in jenkins
     assert "./infra/jenkins/bin/lakehouse-validate-workflows:/usr/local/bin/lakehouse-validate-workflows:ro" in jenkins
     for path in (DATA_PRODUCTS, ROOT / "infra/airflow/validate-bundle-config.py"):
-        assert '"sparse_dirs": ["dags", "workflows", "notebooks", "configs"]' in path.read_text()
+        assert '"sparse_dirs": ["dags", "workflows", "notebooks", "configs", "materialized_views"]' in path.read_text()
         # CR-6: Airflow scans only the stub's folder, never notebooks/ or other repository code.
         assert f'"subdir": "{spec.STUB_PATH.parent}"' in path.read_text()
 

@@ -38,9 +38,9 @@ def apply_grant_plan(current, plan):
 def apply_user_plan(current, plan):
     state = {name: (s.plugin, set(s.roles)) for name, s in current.items()}
     for name, _roles in plan.create:
-        state[name] = (reconcile.LDAP_PLUGIN, set())
+        state[name] = (plan.plugin_for(name), set())
     for name in plan.switch:
-        state[name] = (reconcile.LDAP_PLUGIN, state[name][1])
+        state[name] = (plan.plugin_for(name), state[name][1])
     for name, role in plan.grant:
         state[name][1].add(role)
     for name, role in plan.revoke:
@@ -193,3 +193,17 @@ def test_p9_the_metadata_grant_is_held_exactly_where_usage_is(levels):
         assert (("SELECT", "ALL TABLES IN DATABASE information_schema") in held) == has_usage
         assert {p for p, o in held if o == "ALL TABLES IN DATABASE information_schema"} <= {"SELECT"}
         assert not any(o == "DATABASE information_schema" for _, o in held)
+
+
+# P2b — mv-promotion: after one plan, every desired user has its login method (token for writers, LDAP for people)
+@settings(print_blob=True)
+@given(user_states, memberships, st.data())
+def test_p2b_every_desired_user_ends_on_its_login_method(current, member_map, data):
+    desired = reconcile.desired_users(member_map)
+    writers = frozenset(data.draw(st.lists(st.sampled_from(sorted(desired) or ["nobody"]), unique=True)))
+    plan = reconcile.plan_users(current, desired, writers)
+    state = apply_user_plan(current, plan)
+    for name in desired:
+        if name not in plan.conflicts:
+            assert state[name][0] == (reconcile.JWT_PLUGIN if name in writers else reconcile.LDAP_PLUGIN)
+    assert reconcile.plan_users({n: reconcile.UserState(n, p, frozenset(r)) for n, (p, r) in state.items()}, desired, writers).switch == []

@@ -68,6 +68,11 @@ PLATFORM_ADMIN_GROUP = data_products.PLATFORM_ADMIN_GROUP
 PLATFORM_ADMIN_ROLE = "role_platform_admin"
 PLATFORM_ADMIN_BUILTINS = ("user_admin", "db_admin", "cluster_admin")
 SERVICE_ACCOUNT_PREFIX = "service-account-"
+# Product writers log in with their Keycloak access token instead of a password, so the
+# platform's materialized-view deployer never handles one (mv-promotion). The FE fetches
+# the realm keys over the core network; tokens carry the public issuer.
+JWT_JWKS_URL = os.environ.get("STARROCKS_JWT_JWKS_URL", "http://keycloak:8080/realms/lakehouse/protocol/openid-connect/certs")
+JWT_ISSUER = os.environ.get("KEYCLOAK_ISSUER", "http://keycloak.localhost:8080/realms/lakehouse")
 LEVELS = ("none", "read", "write", "manage")
 INTERNAL_CATALOG = "default_catalog"
 

@@ -16,7 +16,7 @@ import re
 from pathlib import Path
 from typing import Any, MutableMapping
 
-from .spec import WorkflowError, load_repository
+from .spec import WorkflowError, load_materialized_views, load_repository
 
 
 def load_workflows(namespace: MutableMapping[str, Any], stub_file: str) -> None:
@@ -29,13 +29,18 @@ def load_workflows(namespace: MutableMapping[str, Any], stub_file: str) -> None:
 
     root = Path(stub_file).resolve().parents[1]
     workflows, problems = load_repository(root)
+    found, view_problems = load_materialized_views(root)
+    problems += view_problems
     if problems:
         raise WorkflowError(problems)
-    if not workflows:
+    if not workflows and not found:
         return
     identity = identity_for(Path(stub_file))
-    from .factory import build_dag
+    from .factory import build_dag, build_mv_dag
 
-    for workflow in workflows:
-        dag = build_dag(workflow, root, identity)
+    views = {view.name: view.statement for view in found}
+    dags = [build_dag(workflow, root, identity, views) for workflow in workflows]
+    if views:
+        dags.append(build_mv_dag(views, identity))
+    for dag in dags:
         namespace["dag_" + re.sub(r"[^0-9a-zA-Z_]", "_", dag.dag_id)] = dag

@@ -415,3 +415,83 @@ def test_a_task_runs_with_its_trigger_values_replacing_the_same_option(monkeypat
     assert "Effective arguments" in caplog.text
     factory._submit_spark_job("job.py", "uat", "local[*]", ["--date", "2026-11-10"], "unix://x", task_name="test_environment_first", **run)
     assert container.commands[-1][0][-3:] == ["--", "--date", "2026-11-10"]  # other tasks run as written
+
+
+# --- Materialized view promotion (mv-promotion FR-4, FR-5) -----------------------------
+
+MV_SQL = "CREATE MATERIALIZED VIEW ${mv_database}.mv_daily REFRESH ASYNC AS SELECT 1 AS x FROM ${catalog}.${namespace}.t"
+
+
+def mv_bundle(tmp_path):
+    root = bundle(tmp_path)
+    (root / "materialized_views/sample").mkdir(parents=True)
+    (root / "materialized_views/sample/mv_daily.sql").write_text(MV_SQL + ";\n")
+    return root
+
+
+def test_a_bundle_with_views_deploys_them_before_its_tasks_and_gets_an_on_demand_dag(tmp_path):
+    dags = load(mv_bundle(tmp_path))
+    dag = dags["dag_default_uat_test_environment"]
+    deploy = dag.get_task("deploy_materialized_views")
+    assert deploy.op_kwargs["views"] == {"mv_daily": MV_SQL} and deploy.upstream_task_ids == {"validate_environment"}
+    assert "deploy_materialized_views" in dag.get_task("submit_test_environment_first").upstream_task_ids
+    assert "stop_cluster" in deploy.downstream_task_ids
+    standalone = dags["dag_default_uat_deploy_materialized_views"]
+    assert [t.task_id for t in standalone.tasks] == ["deploy_materialized_views"] and standalone.get_task("deploy_materialized_views").op_kwargs["revoke"] is True
+
+
+def test_a_bundle_without_views_has_no_deploy_task(tmp_path):
+    dags = load(bundle(tmp_path))
+    assert "deploy_materialized_views" not in dags["dag_default_uat_test_environment"].task_ids and "dag_default_uat_deploy_materialized_views" not in dags
+
+
+class FakeConnection:
+    def __init__(self, cursor):
+        self._cursor, self.closed = cursor, False
+
+    def cursor(self):
+        return self._cursor
+
+    def close(self):
+        self.closed = True
+
+
+class MvCursor:
+    def __init__(self):
+        self.statements = []
+
+    def execute(self, sql, params=None):
+        self.statements.append(sql)
+
+    def fetchall(self):
+        return []
+
+
+def test_the_deploy_logs_in_as_the_writer_with_the_broker_token_and_revokes_on_demand_runs(monkeypatch, caplog):
+    calls, logins, cursor = [], [], MvCursor()
+    monkeypatch.setattr(factory, "_mv_placement", lambda product, environment: (factory.mv_deploy.Placement("lakehouse_uat", "default_lhuat", "default_lhuat"), "srv-default-writer"))
+    monkeypatch.setattr(factory, "_read_broker_control_token", lambda: "c" * 40)
+    monkeypatch.setattr(factory, "_broker_request", lambda method, route, payload, credential: calls.append((method, route)) or {"run_handle": "h", "access_token": "eyJtoken"})
+    monkeypatch.setattr(factory.mv_deploy, "connect", lambda host, port, user, token, ca: logins.append((host, user, token, ca)) or FakeConnection(cursor))
+    caplog.set_level("INFO")
+    factory._deploy_materialized_views({"mv_daily": MV_SQL}, "default", "uat", revoke=True, **context())
+    assert logins == [("starrocks-fe", "srv-default-writer", "eyJtoken", "/run/certs/starrocks-ca.crt")]
+    assert any(sql.startswith("CREATE MATERIALIZED VIEW default_lhuat.mv_daily COMMENT 'lakehouse-mv sha256=") and "lakehouse_uat.default_lhuat.t" in sql for sql in cursor.statements)
+    assert calls == [("POST", "/v1/runs"), ("DELETE", "/v1/runs/h")]
+    assert "eyJtoken" not in caplog.text and "created ['mv_daily']" in caplog.text
+
+
+def test_a_failed_view_fails_the_task_and_starrocks_off_skips(monkeypatch):
+    class Failing(MvCursor):
+        def execute(self, sql, params=None):
+            if sql.startswith("CREATE"):
+                raise RuntimeError("(1064, 'syntax error')")
+    monkeypatch.setattr(factory, "_mv_placement", lambda product, environment: (factory.mv_deploy.Placement("c", "n", "db"), "srv-default-writer"))
+    monkeypatch.setattr(factory, "_read_broker_control_token", lambda: "c" * 40)
+    monkeypatch.setattr(factory, "_broker_request", lambda *a: {"run_handle": "h", "access_token": "t"})
+    monkeypatch.setattr(factory.mv_deploy, "connect", lambda *a: FakeConnection(Failing()))
+    with pytest.raises(AirflowException, match="failed to deploy: mv_daily"):
+        factory._deploy_materialized_views({"mv_daily": MV_SQL}, "default", "uat", **context())
+    monkeypatch.setenv("STARROCKS_ENABLED", "false")
+    monkeypatch.setattr(factory, "_broker_request", lambda *a: pytest.fail("no token when StarRocks is off"))
+    factory._deploy_materialized_views({"mv_daily": MV_SQL}, "default", "uat", **context())

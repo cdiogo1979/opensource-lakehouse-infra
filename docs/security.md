@@ -33,7 +33,7 @@ Text alternative: a person signs in once through Keycloak (users and passwords i
 - **Single sign-on**: JupyterHub, Airflow, Jenkins and the RustFS console sign in through Keycloak (realm `lakehouse`, OIDC); StarRocks checks the same password against LDAP. Users and passwords live in the LDAP directory, reached only over LDAPS, with Argon2 password hashes; groups live in Keycloak.
 - **Access by group**: each data product has four groups, `role-<product>-owner`, `-developer`, `-analyst` and `-writer`, plus the platform-wide `role-platform-admin`. Every system derives its permissions from these groups; nothing is granted to individual users.
 - **Admission is checked again**: JupyterHub checks the groups at sign-in and again before each server starts; Airflow, JupyterHub and Jenkins read the product files at each sign-in.
-- **Service identities**: each product's Airflow runs write as its own writer user (`srv-<product>-writer`); StarRocks reaches Polaris as `srv-starrocks`; the reconcilers act as the Keycloak administrator ([limits](#limits)).
+- **Service identities**: each product's Airflow runs write as its own writer user (`srv-<product>-writer`), which logs in to StarRocks only with a broker-issued Keycloak token (no password login), for the materialized-view deploy; StarRocks reaches Polaris as `srv-starrocks`; the reconcilers act as the Keycloak administrator ([limits](#limits)).
 - **Break-glass accounts** exist only for recovery: Keycloak `admin` (master realm), Jenkins `jenkins-break-glass`, the local Airflow FAB login, StarRocks `root`, and the RustFS root keys. Their secrets are in `.runtime/credentials/`.
 
 Details: [Identity](reference/identity.md).
