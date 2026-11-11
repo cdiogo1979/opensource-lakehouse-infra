@@ -40,7 +40,7 @@ Details: [Identity](reference/identity.md).
 
 ## 2. Authorization: least privilege on every system
 
-- **One source of truth**: each product's file sets its access levels (`none`, `read`, `write`, `manage`) per role and environment ([access levels](components.md#access-levels)), applied identically to Polaris, StarRocks and RustFS.
+- **One source of truth**: each product's file sets its access levels (`none`, `read`, `write`, `manage`) per role and environment ([access levels](reference/data-products.md#access-levels)), applied identically to Polaris, StarRocks and RustFS.
 - **Polaris** (tables): per product role and catalog, privileges only on the product's own namespace; product roles can't create, drop or move namespaces.
 - **StarRocks** (SQL): roles named after the groups, with database-scoped grants that mirror Polaris; Polaris is the outer bound (StarRocks reaches it at writer level, so no table drops through it). Catalog metadata (`information_schema`) is filtered by each user's own privileges.
 - **RustFS** (console and storage): one policy per group, limited to the product's buckets.

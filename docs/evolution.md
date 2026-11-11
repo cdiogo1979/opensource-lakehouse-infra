@@ -4,7 +4,7 @@ For anyone who wants to know why the platform looks the way it does. The big pic
 
 ## The method: AI-DLC
 
-The platform has been built with the **AI-DLC** (AI-Driven Development Life Cycle) workflow (`.claude/skills/aidlc-workflows`), with an AI assistant doing the work and a person approving each step.
+The platform has been built with the **AI-DLC** (AI-Driven Development Life Cycle) workflow (`.claude/skills/aidlc-workflows`), an adaptation of AWS's AI-DLC workflows, version 1 ([awslabs/aidlc-workflows](https://github.com/awslabs/aidlc-workflows)), with an AI assistant doing the work and a person approving each step.
 
 - **Intents**: every change is an *intent*, such as "add streaming checkpoints". An intent goes through stages: inception (workspace detection, reverse engineering, requirements, workflow planning, design), construction (functional design, code generation, build and test), and a deploy handoff. Stages that add nothing are skipped.
 - **Approvals**: each stage ends with a review; nothing moves on without an explicit approval. Questions are asked as multiple choice, with a recommended option.

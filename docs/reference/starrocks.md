@@ -55,7 +55,7 @@ Optional:
   - developers do the same in dev, and read production and UAT
   - analysts read production
   - owners and platform admins manage them
-  - materialized views accelerate queries for everyone through query rewrite ([Components](../components.md#materialized-views-and-query-acceleration))
+  - materialized views accelerate queries for everyone through query rewrite ([Data products](data-products.md#materialized-views-and-query-acceleration))
 - **Enforcement**: the bootstrap revokes and reports any privilege added to these roles by hand.
 
 ## Users

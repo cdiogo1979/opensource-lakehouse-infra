@@ -15,7 +15,7 @@
 7. [Security](#security) ([full page](docs/security.md))
 8. [All documentation](#all-documentation)
    - [Components in depth](docs/components.md)
-   - Reference: [AI-DLC](docs/reference/aidlc.md), [Identity](docs/reference/identity.md), [Polaris](docs/reference/polaris.md), [RustFS](docs/reference/rustfs.md), [JupyterHub](docs/reference/jupyterhub.md), [Airflow](docs/reference/airflow.md), [StarRocks](docs/reference/starrocks.md), [Jenkins](docs/reference/jenkins.md), [Workload Python](docs/reference/workload-python.md), [Streaming checkpoints](docs/reference/streaming-checkpoints.md), [Operations](docs/reference/operations.md), [Scripts](docs/reference/scripts.md), [Known limitations](docs/reference/limitations.md)
+   - Reference: [Data products](docs/reference/data-products.md), [AI-DLC](docs/reference/aidlc.md), [Identity](docs/reference/identity.md), [Polaris](docs/reference/polaris.md), [RustFS](docs/reference/rustfs.md), [JupyterHub](docs/reference/jupyterhub.md), [Airflow](docs/reference/airflow.md), [StarRocks](docs/reference/starrocks.md), [Jenkins](docs/reference/jenkins.md), [Workload Python](docs/reference/workload-python.md), [Streaming checkpoints](docs/reference/streaming-checkpoints.md), [Operations](docs/reference/operations.md), [Scripts](docs/reference/scripts.md), [Known limitations](docs/reference/limitations.md)
    - [Platform evolution](docs/evolution.md)
 9. [Known limitations](#known-limitations) ([full list](docs/reference/limitations.md))
 10. [Future work](#future-work) ([details](docs/future-work.md))
@@ -121,7 +121,7 @@ Each journey page has its own diagram of how that role moves through the platfor
 | Airflow 3.3 | Scheduled Spark workloads from Git DAG bundles | <http://127.0.0.1:8085> | airflow (optional) |
 | StarRocks 4.1.7 | Interactive SQL over the Iceberg tables, with materialized views for acceleration | `127.0.0.1:9030` (MySQL protocol) | starrocks |
 | Jenkins 2.580 | CI for each data product's repository, one folder per product | <http://127.0.0.1:8090> | jenkins |
-| AI-DLC | The change workflow: every platform change is a planned, approved and recorded intent, and the canonical design stays current | none (in the repository: `.claude/skills/aidlc-workflows`, `aidlc-docs/`) | — |
+| AI-DLC | The change workflow, adapted from AWS's AI-DLC workflows v1: every platform change is a planned, approved and recorded intent, and the canonical design stays current | none (in the repository: `.claude/skills/aidlc-workflows`, `aidlc-docs/`) | — |
 
 How they fit together: [Components](docs/components.md).
 
@@ -157,7 +157,7 @@ What makes it a *product*:
 - **Promoted, not edited in place**: work happens in dev, is checked in UAT, and reaches production through reviewed branches.
 - **Declared**: creating, changing or removing it is one file and one command for the platform admin, and the same rules apply to every product.
 
-The platform starts with one product, `default`, and can host any number side by side ([create one](docs/journeys/platform-admin.md#3-create-change-or-remove-a-data-product), [file format](docs/components.md#data-products)).
+The platform starts with one product, `default`, and can host any number side by side ([create one](docs/journeys/platform-admin.md#3-create-change-or-remove-a-data-product), [file format](docs/reference/data-products.md#data-product-file)).
 
 ## User journeys
 
@@ -181,9 +181,10 @@ It's meant for one machine: see [Security](docs/security.md) for every layer, th
 
 ## All documentation
 
-- **Overview**: [Components](docs/components.md) (architecture, Compose modules, data layout, data products, access levels, materialized views).
+- **Overview**: [Components](docs/components.md) (how the parts fit together, Compose modules).
 - **Journeys**: [Platform admin](docs/journeys/platform-admin.md), [Data product owner](docs/journeys/data-product-owner.md), [Data product developer](docs/journeys/data-product-developer.md), [Data analyst](docs/journeys/data-analyst.md).
 - **Reference**:
+  - [Data products: data layout, product file, access levels, materialized views](docs/reference/data-products.md)
   - [Identity: Keycloak, LDAP, users and groups](docs/reference/identity.md)
   - [Polaris](docs/reference/polaris.md), [RustFS](docs/reference/rustfs.md)
   - [JupyterHub](docs/reference/jupyterhub.md), [Airflow and the DAG factory](docs/reference/airflow.md), [StarRocks](docs/reference/starrocks.md), [Jenkins](docs/reference/jenkins.md)

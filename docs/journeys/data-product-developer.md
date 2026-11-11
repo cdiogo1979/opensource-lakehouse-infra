@@ -4,7 +4,7 @@ For a product's developers (group `role-<product>-developer`, for example `joe-d
 
 **The detailed repository structure lives in the sample data product repository**, [`opensource-lakehouse-sample-dp`](https://github.com/cdiogo1979/opensource-lakehouse-sample-dp): subprojects, medallion layers, the notebook standard, naming conventions, and the shared helpers. This page covers what the platform provides and expects.
 
-Your default access: read prod and UAT, read and write dev, author materialized views in dev ([access levels](../components.md#access-levels)).
+Your default access: read prod and UAT, read and write dev, author materialized views in dev ([access levels](../reference/data-products.md#access-levels)).
 
 ## Journey at a glance
 
@@ -92,4 +92,4 @@ Set `checkpoint_path: s3ckpt://<bucket>/checkpoints` in `configs/<env>.yml` (you
 
 ## 7. Accelerate queries with materialized views
 
-StarRocks materialized views make queries faster for everyone: StarRocks rewrites a matching query on the Iceberg tables to read the view ([how it works](../components.md#materialized-views-and-query-acceleration)). As a developer you author them in your product's **dev** MV database (`default_lhdev` in `default_catalog` for `default`), and read the prod and UAT ones; the writer creates them in every environment from workloads. A view keeps its author: if you leave the product's groups, it may stop refreshing. SQL access and roles: [StarRocks](../reference/starrocks.md). A follow-up will cover MV authoring in this journey in more detail.
+StarRocks materialized views make queries faster for everyone: StarRocks rewrites a matching query on the Iceberg tables to read the view ([how it works](../reference/data-products.md#materialized-views-and-query-acceleration)). As a developer you author them in your product's **dev** MV database (`default_lhdev` in `default_catalog` for `default`), and read the prod and UAT ones; the writer creates them in every environment from workloads. A view keeps its author: if you leave the product's groups, it may stop refreshing. SQL access and roles: [StarRocks](../reference/starrocks.md). A follow-up will cover MV authoring in this journey in more detail.

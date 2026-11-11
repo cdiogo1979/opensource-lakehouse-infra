@@ -2,25 +2,23 @@
 
 ## Project Information
 - Project Type: Brownfield
-- Start Date: 2026-11-11T06:30:00Z
+- Start Date: 2026-11-11T10:15:00Z
 - Current Stage: DEPLOY - Deploy (approval pending)
-- Intent: Restructure the platform documentation for easy navigation: clear components, user journeys (platform admin, data product owner, data product developer, data analyst / BI user), and a big-picture platform evolution (the AI-DLC framework, then the main intents). Deliver a separate README draft for review before replacing the current one.
-- Intent ID: 20261111-documentation-restructure
-- Previous Intent: aidlc-docs/archive/20261111-reconciler-starrocks-recovery (closed)
+- Intent: Move the data products and data layout content out of docs/components.md into its own reference page, and state that AI-DLC is an adaptation of the AWS AI-DLC v1 workflow.
+- Intent ID: 20261111-data-products-reference
+- Previous Intent: aidlc-docs/archive/20261111-documentation-restructure (closed)
 
 ## Workspace State
 - Existing code: Yes. Documentation-only change. Workspace root: /Users/carlosdiogo/code_repo/opensource-lakehouse-infra.
-- Reverse Engineering Needed: Yes — focused on the current README and the archived intents.
+- Reverse Engineering Needed: No; the previous intent's documentation analysis applies (archived).
 
 ## Stage Progress
-- [x] Workspace Detection — brownfield; previous intent closed.
-- [x] Focused Reverse Engineering — current README (589 lines, 13 sections) and 27 archived intents read.
-- [x] Requirements Analysis — approved on 2026-11-11 (CR-1, CR-2).
+- [x] Workspace Detection — brownfield; previous intent closed; small documentation intent.
+- [x] Requirements Analysis — minimal depth; approved on 2026-11-11.
 - [x] Workflow Planning — approved on 2026-11-11.
-- [x] Code Generation — draft approved on 2026-11-11 after the change requests.
-- [x] Build and Test — approved on 2026-11-11.
-- [x] Review and switch — README.md and docs/ in place; previous README kept at construction/switch/README.previous.md; links, coverage and tests rechecked.
-- [ ] Deploy — pr_request.md written (no deployment steps); awaiting approval.
+- [x] Code Generation — page created, links repointed, AI-DLC origin added.
+- [x] Build and Test — links, moved content, pytest passed.
+- [ ] Deploy — pr_request.md written (no deployment); awaiting approval.
 
 ## Extension Configuration
 | Extension | Enabled | Decided At |
@@ -30,23 +28,27 @@
 | Resiliency Baseline | No | Requirements Analysis |
 | Workflow Conventions | Yes (always enforced) | Workflow start |
 
+## Follow-ups
+- Materialized-view authoring in the developer journey and query-rewrite verification.
+- Workflow params; per-workflow parallelism and Spark memory; Jupyter memory limit; vended-credential refresh for long writes; least-privilege reconciler identity; Hub restart on product model changes.
+
 ## Current Status
-- Lifecycle Phase: DEPLOY
+- Lifecycle Phase: VERIFICATION_COMPLETE
 - Current Stage: Deploy
 - Next Stage: Intent closure
-- Status: Awaiting approval of the Deploy handoff.
+- Status: Awaiting approval of code generation, build and test, and the Deploy handoff.
 
 ## Intent Lifecycle
 <!-- intent-lifecycle:start -->
 ```json
 {
-  "archive": "aidlc-docs/archive/20261111-documentation-restructure",
+  "archive": "aidlc-docs/archive/20261111-data-products-reference",
   "current_stage": "DEPLOY - Deploy",
-  "intent_id": "20261111-documentation-restructure",
-  "name": "Documentation Restructure",
-  "previous_intent": "aidlc-docs/archive/20261111-reconciler-starrocks-recovery",
+  "intent_id": "20261111-data-products-reference",
+  "name": "Data Products Reference",
+  "previous_intent": "aidlc-docs/archive/20261111-documentation-restructure",
   "status": "CLOSED",
-  "summary": "aidlc-docs/archive/20261111-documentation-restructure/intent-summary.md"
+  "summary": "aidlc-docs/archive/20261111-data-products-reference/intent-summary.md"
 }
 ```
 <!-- intent-lifecycle:end -->

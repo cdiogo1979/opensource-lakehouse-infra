@@ -30,7 +30,7 @@ Text alternative: you define the product in its file (access levels, materialize
 
 ## 1. What you own
 
-Your product is one file, `data-products/<product>.yaml` ([format](../components.md#data-products)). With the `manage` level in every environment you have:
+Your product is one file, `data-products/<product>.yaml` ([format](../reference/data-products.md#data-product-file)). With the `manage` level in every environment you have:
 
 | Where | Your rights |
 |---|---|
@@ -53,7 +53,7 @@ The file's `access`, `materialized_views` and `apps` blocks set what each role c
 | analyst | read prod | read prod | yes | User | read |
 | writer (service user for runs) | read and write all | author in all | — | Viewer | — |
 
-- **Changing a level**: edit the file and ask the platform admin to apply it; removed grants are revoked. [Access levels](../components.md#access-levels) explains what read, write and manage mean in each system.
+- **Changing a level**: edit the file and ask the platform admin to apply it; removed grants are revoked. [Access levels](../reference/data-products.md#access-levels) explains what read, write and manage mean in each system.
 - **People**: the platform admin adds people to your groups in Keycloak. Polaris and StarRocks follow within five minutes; JupyterHub, Airflow and Jenkins at the next sign-in.
 - **Checking**: `python3 scripts/verify/role-matrix.py --product <product>` (run by the platform admin) tests every role, including that none reaches another product.
 

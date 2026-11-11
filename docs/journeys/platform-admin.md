@@ -41,7 +41,7 @@ cp .env.example .env                    # first time only
 ```
 
 - **Step 1** creates missing credentials under `.runtime/credentials/` and starts the containers. It never changes realm, users, buckets, or catalogs.
-- **Step 2** reruns step 1, then creates the Keycloak realm, clients, and [bootstrap users](../reference/identity.md#bootstrap-users), and every [data product](../components.md#data-products) in `data-products/` (at first only `default`):
+- **Step 2** reruns step 1, then creates the Keycloak realm, clients, and [bootstrap users](../reference/identity.md#bootstrap-users), and every [data product](../reference/data-products.md) in `data-products/` (at first only `default`):
   - Keycloak groups
   - buckets and storage policies (and checkpoint keys)
   - Polaris catalogs, namespaces, and grants
@@ -95,7 +95,7 @@ As `platform-admin` you are owner of every product, StarRocks system admin, Hub 
 - **What goes**: the Jenkins folder (with its jobs and build history) and entries, StarRocks roles and MV databases, Polaris roles and namespaces, checkpoint keys, buckets and policies, the Keycloak groups and writer user, and finally the product file. Its Airflow bundles go last (Airflow is recreated, as for create). The file and its applied state are backed up to `.runtime/backups/<time>-remove-<name>/` first.
 - **Users stay**: only their memberships go. A failed removal can be rerun with the same command.
 
-The file format and access levels: [Data products](../components.md#data-products). Handing a product to its owner: the [data product owner journey](data-product-owner.md).
+The file format and access levels: [Data products](../reference/data-products.md#data-product-file). Handing a product to its owner: the [data product owner journey](data-product-owner.md).
 
 ## 4. Add users
 

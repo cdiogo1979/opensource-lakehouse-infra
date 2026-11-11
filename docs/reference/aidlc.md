@@ -4,6 +4,8 @@ Reference for anyone who changes the platform: how every change is planned, appr
 
 AI-DLC (AI-Driven Development Life Cycle) is the platform's change component: an AI assistant does the work, following the workflow, and a person approves each stage. It is part of the repository, not a running service.
 
+It is an adaptation of AWS's AI-DLC workflows, version 1 ([awslabs/aidlc-workflows](https://github.com/awslabs/aidlc-workflows)): the inception, construction and deploy stages, approval gates, question format and opt-in extensions come from there. The copy used here adds intent closure (`scripts/aidlc_intent.py compact`), which writes what is now true into the canonical knowledge and archives the intent, with the `aidlc-docs/current/`, `knowledge/` and `archive/` layout it relies on, and the always-on Workflow Conventions extension. Most of this adaptation was not written by the platform's author, and its source can no longer be identified.
+
 | Part | Where | Role |
 |---|---|---|
 | The workflow | `.claude/skills/aidlc-workflows/` (also `.agents/skills/aidlc-workflows/`) | Stage rules, question format, content validation, and opt-in extensions |

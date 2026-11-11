@@ -2,7 +2,7 @@
 
 For a product's analysts and BI users (group `role-<product>-analyst`, for example `peter-analyst` in `role-default-analyst`): querying the product's tables with SQL from the command line, DBeaver, or a BI tool. Back to the [README](../../README.md).
 
-Your default access: read the product's production tables and materialized views; nothing in UAT or dev ([access levels](../components.md#access-levels)). You may also use JupyterHub ([JupyterHub](../reference/jupyterhub.md)).
+Your default access: read the product's production tables and materialized views; nothing in UAT or dev ([access levels](../reference/data-products.md#access-levels)). You may also use JupyterHub ([JupyterHub](../reference/jupyterhub.md)).
 
 ## Journey at a glance
 
@@ -55,7 +55,7 @@ Use your own username and password, the same as for Keycloak sign-in. **Every co
 
 ## 4. Faster queries through materialized views
 
-You don't query materialized views directly: StarRocks rewrites a query on the tables to read a matching materialized view when one exists, so the same SQL runs faster ([how it works](../components.md#materialized-views-and-query-acceleration)). Developers author the views ([developer journey](data-product-developer.md#7-accelerate-queries-with-materialized-views)).
+You don't query materialized views directly: StarRocks rewrites a query on the tables to read a matching materialized view when one exists, so the same SQL runs faster ([how it works](../reference/data-products.md#materialized-views-and-query-acceleration)). Developers author the views ([developer journey](data-product-developer.md#7-accelerate-queries-with-materialized-views)).
 
 ## 5. When something fails
 
