@@ -2,53 +2,50 @@
 
 ## Project Information
 - Project Type: Brownfield
-- Start Date: 2026-11-11T04:00:00Z
-- Current Stage: DEPLOY - Deploy (approval pending)
-- Intent: Durable Spark Structured Streaming checkpoints in each product's bucket: a Hadoop S3 filesystem in the Spark images and a credential path for a checkpoint prefix, for Airflow runs and Jupyter, so product notebooks can stream from Iceberg tables (requested by the paused opensource-lakehouse-sample-dp intent 20261111-tpch-medallion).
-- Intent ID: 20261111-spark-s3-checkpoints
-- Previous Intent: aidlc-docs/archive/20261111-workflow-subprojects (closed)
+- Start Date: 2026-11-11T01:10:00Z
+- Current Stage: DEPLOY - Deploy
+- Intent: Fix StarRocks metadata access for product roles: tools such as DBeaver list tables through `information_schema.tables` with an Iceberg catalog as the current catalog, and StarRocks refuses non-admin users ("SELECT privilege on TABLE tables"), although their table grants are correct.
+- Intent ID: 20261111-starrocks-metadata-access
+- Previous Intent: aidlc-docs/archive/20261111-spark-s3-checkpoints (closed)
 
 ## Workspace State
 - Existing code: Yes. Workspace root: /Users/carlosdiogo/code_repo/opensource-lakehouse-infra. Git metadata: none.
-- Reverse Engineering Needed: Yes — focused on Spark's storage access, RustFS identity and STS, and the token flows.
+- Reverse Engineering Needed: Yes — focused on StarRocks' external-catalog `information_schema` and the product role grants.
 
 ## Stage Progress
 - [x] Workspace Detection — brownfield; previous intent closed.
 - [x] Focused Reverse Engineering — approved on 2026-11-11.
 - [x] Requirements Analysis — approved on 2026-11-11.
-- [ ] User Stories — SKIP.
 - [x] Workflow Planning — approved on 2026-11-11.
-- [x] Application Design — approved on 2026-11-11 (static checkpoint keys, CR-1).
-- [ ] Units Generation — SKIP (one unit, `s3-checkpoints`).
-- [x] Functional Design — approved on 2026-11-11.
-- [ ] NFR Requirements, NFR Design, Infrastructure Design — SKIP.
 - [x] Code Generation — approved on 2026-11-11.
-- [x] Build and Test — approved on 2026-11-11 (verification complete).
-- [ ] Deploy — pr_request.md and deploy_instructions.md written; awaiting approval.
+- [x] Build and Test — approved on 2026-11-11 (user confirmed DBeaver).
+- [x] Deploy — handoff approved on 2026-11-11; closure approved.
 
 ## Extension Configuration
 | Extension | Enabled | Decided At |
 |---|---|---|
-| Security Baseline | Yes | Requirements Analysis (Q4: A) |
-| Property-Based Testing | Partial (PBT-02, 03, 07, 08, 09 enforced) | Requirements Analysis (Q4: A) |
-| Resiliency Baseline | No | Requirements Analysis (Q4: A) |
+| Security Baseline | Yes | Requirements Analysis (Q3: A) |
+| Property-Based Testing | Partial (PBT-02, 03, 07, 08, 09 enforced) | Requirements Analysis (Q3: A) |
+| Resiliency Baseline | No | Requirements Analysis (Q3: A) |
 | Workflow Conventions | Yes (always enforced) | Workflow start |
 
 ## Current Status
 - Lifecycle Phase: DEPLOY
 - Current Stage: Deploy
 - Next Stage: Intent closure
-- Status: Awaiting approval of the Deploy handoff.
+- Status: Closure approved; compaction in progress.
 
 ## Intent Lifecycle
 <!-- intent-lifecycle:start -->
 ```json
 {
+  "archive": "aidlc-docs/archive/20261111-starrocks-metadata-access",
   "current_stage": "DEPLOY - Deploy",
-  "intent_id": "20261111-spark-s3-checkpoints",
-  "name": "Spark S3 Checkpoints",
-  "previous_intent": "aidlc-docs/archive/20261111-workflow-subprojects",
-  "status": "VERIFICATION_COMPLETE"
+  "intent_id": "20261111-starrocks-metadata-access",
+  "name": "StarRocks Metadata Access",
+  "previous_intent": "aidlc-docs/archive/20261111-spark-s3-checkpoints",
+  "status": "CLOSED",
+  "summary": "aidlc-docs/archive/20261111-starrocks-metadata-access/intent-summary.md"
 }
 ```
 <!-- intent-lifecycle:end -->

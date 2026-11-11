@@ -1,6 +1,6 @@
 # Functional Design — Airflow Workflows (Platform DAG Factory)
 
-Current functional design of the platform component that turns data product repositories into Airflow DAGs. For architecture, see [`../application-design.md`](../application-design.md). History is in the [Platform DAG Factory intent archive](../../../archive/20261110-platform-dag-factory/intent-summary.md).
+Current functional design of the platform component that turns data product repositories into Airflow DAGs. For architecture, see [`../application-design.md`](../application-design.md). History is in the [Platform DAG Factory intent archive](../../../archive/20261110-platform-dag-factory/intent-summary.md); the checkpoint key mount is from the [Spark S3 Checkpoints intent archive](../../../archive/20261111-spark-s3-checkpoints/intent-summary.md).
 
 ## Responsibility
 `infra/airflow/lakehouse_dags` builds every data product's DAGs from the product repository's `workflows/*.json`, and supplies all the task code those DAGs run.
@@ -16,6 +16,7 @@ Current functional design of the platform component that turns data product repo
 - `airflow-dag-processor` and `airflow-scheduler` mount `./infra/airflow/lakehouse_dags` read-only at `/opt/lakehouse/python/lakehouse_dags`, with `PYTHONPATH=/opt/lakehouse/python`.
 - Jenkins mounts the same package plus `infra/jenkins/bin/lakehouse-validate-workflows`.
 - Changes are visible through the mount at once. Apply them with `start-airflow`, after `scripts/verify/dag-factory-tests.sh`.
+- `airflow-scheduler` (which runs the tasks, LocalExecutor) also mounts the staged checkpoint keys `.runtime/container-mounts/checkpoint-keys` read-only at `/run/secrets/checkpoint-keys`; every Airflow service gets `LAKEHOUSE_CHECKPOINT_KEYS_HOST_DIR`, the same folder's host path, exported by `scripts/lakehouse.sh`.
 
 ## Modules
 | Module | Dependencies | Role |
@@ -52,7 +53,8 @@ Current functional design of the platform component that turns data product repo
   - **Task options**: `retries`, `retry_delay` and `execution_timeout` are set on that task's `submit_` only.
 - **Task code**:
   - **Templates**: every task is a `LakehouseOperator` (`template_fields = ()`), so `{{ conn.* }}` and `{{ var.* }}` in `args` are never rendered.
-  - **`create_cluster`**: registers `{dag_id, run_id}` with the broker over the pinned endpoint and CA. It starts `lakehouse-<dag_id[:40]>-<sha256(run_id)[:12]>` with the run's bundle checkout at `/opt/lakehouse-bundle` (read-only) and the broker CA. The environment holds the token, run handle and capability, `LAKEHOUSE_ENVIRONMENT`, `LAKEHOUSE_PRODUCT`, and `PYTHONPATH=/opt/lakehouse-bundle`. If startup fails, it removes the container and revokes the run.
+  - **Checkpoint key** (`_checkpoint_key_volume`, before the broker registration): the bucket of the run's product and environment comes from `/run/secrets/checkpoint-keys/.buckets.json` (product → environment → bucket, no secrets, written by the RustFS checkpoint key bootstrap, because the scheduler has no product model). The staged file must be a regular file, not a symlink; the host folder must be absolute and named `checkpoint-keys`. It becomes the one read-only mount `/run/secrets/lakehouse-checkpoints/<bucket>`, so a `-main` run holds only the `prod` key and a `-uat` run only the `uat` key. Any problem fails `create_cluster` before a run is registered or a container exists.
+  - **`create_cluster`**: registers `{dag_id, run_id}` with the broker over the pinned endpoint and CA. It starts `lakehouse-<dag_id[:40]>-<sha256(run_id)[:12]>` with the run's bundle checkout at `/opt/lakehouse-bundle` (read-only), the broker CA and the checkpoint key. The environment holds the token, run handle and capability, `LAKEHOUSE_ENVIRONMENT`, `LAKEHOUSE_PRODUCT`, and `PYTHONPATH=/opt/lakehouse-bundle`. If startup fails, it removes the container and revokes the run.
   - **`install_requirements`**: an `exec_run` in that container of `/opt/lakehouse/venv/bin/python /opt/lakehouse/workload_python.py install-extras /opt/lakehouse-bundle/requirements.txt --lock /opt/lakehouse/requirements.lock`: nothing without the file; otherwise the extras, constrained by the lock, into the container's venv, with the output redacted (rules in `workload-python-environment.md`).
   - **`validate_environment`**: an `exec_run` in that container of `/opt/lakehouse/venv/bin/python -c` with the repository's `notebooks/common/config_loader.load_environment_config(env, /opt/lakehouse-bundle/configs, product)`.
   - **`submit_<task>`**: `spark-submit --master <LAKEHOUSE_SPARK_MASTER> /opt/lakehouse-bundle/notebooks/workload/[<project>/]<entrypoint> --environment <env> --config-dir /opt/lakehouse-bundle/configs`, then `--` and the `args` when there are any. Arguments are passed as a list, and the output is redacted.
@@ -75,9 +77,11 @@ Current functional design of the platform component that turns data product repo
 - **Non-product bundle**: an import error.
 - **Config check fails**: `validate_environment` fails with redacted output, then `stop_cluster` cleans up.
 - **Broker refusal**: `create_cluster` fails (`unknown_product`, `unknown_dag`, `bundle_mismatch`), with no fallback identity.
+- **Checkpoint key missing or unsafe** (no index entry, missing or symlinked file, bad host folder or bucket name): `create_cluster` fails naming the bucket and the product bootstrap; nothing is registered or started. `start-airflow` refuses to start while any product bucket lacks a staged key.
 - **Observed once (2026-11-10)**: Airflow's per-task bundle refresh hit "detected dubious ownership" on `tracking_repo` when two tasks started together. It did not repeat, and the cause is not established.
 
 ## Verification and limits
+- **Verified 2026-11-11 (Spark S3 checkpoints)**: host `tests/airflow` 71 passed (one key per environment; missing, symlinked, unindexed, unknown-product, bad host folder and bad bucket cases fail before registration); `default-uat-test_environment` 8/8 with only `/run/secrets/lakehouse-checkpoints/bucket-default-uat` (ro) mounted.
 - **Verified 2026-11-10 (shared workload requirements)**: Airflow image 51 passed (the `install_requirements` task, its command and retries, redaction); `default-uat-test_environment` 8/8 without extras; `default-uat-generate_tpch` 13/13 with extras; with `subdir`, only `dags/lakehouse.py` is parsed per bundle.
 - **Verified 2026-11-10 (DAG factory)**:
   - host suite 458 passed (P1, P3, P4; spec, validator, wiring, checkout sync);

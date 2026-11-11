@@ -1,6 +1,6 @@
 # Functional Design — StarRocks SQL Access
 
-This is the current functional design of the StarRocks component. For architecture, see [`../application-design.md`](../application-design.md); for the product access model, see [`lakehouse-product-access.md`](lakehouse-product-access.md). History is in the [StarRocks Integration](../../../archive/20261109-starrocks-integration/intent-summary.md) [Data Product and User Scripts](../../../archive/20261109-data-product-and-user-scripts/intent-summary.md), and [StarRocks LDAP Login](../../../archive/20261109-starrocks-ldap-login/intent-summary.md) intent archives.
+This is the current functional design of the StarRocks component. For architecture, see [`../application-design.md`](../application-design.md); for the product access model, see [`lakehouse-product-access.md`](lakehouse-product-access.md). History is in the [StarRocks Integration](../../../archive/20261109-starrocks-integration/intent-summary.md) [Data Product and User Scripts](../../../archive/20261109-data-product-and-user-scripts/intent-summary.md), [StarRocks LDAP Login](../../../archive/20261109-starrocks-ldap-login/intent-summary.md), and [StarRocks Metadata Access](../../../archive/20261111-starrocks-metadata-access/intent-summary.md) intent archives.
 
 ## Responsibility
 StarRocks 4.1.7 gives people and tools interactive SQL over every data product's Iceberg tables in Polaris, with access identical to each product's roles. It also hosts materialized views in internal databases. It owns no source data: tables live in Polaris and RustFS.
@@ -33,6 +33,7 @@ Catalog properties:
   | `role_platform_admin` | manage (catalog-wide) | manage (catalog-wide) | manage (catalog-wide) | manage in every product |
 
 - **Levels**, in catalog `c` for the product database `d`:
+  - **every level but `none`** also gets `SELECT ON ALL TABLES IN DATABASE information_schema` in `c` (see "Catalog metadata" below)
   - **read**: `USAGE ON CATALOG c`, `SELECT ON ALL TABLES IN DATABASE d`
   - **write**: read, plus `INSERT ON ALL TABLES IN DATABASE d` and `CREATE TABLE ON DATABASE d`. No drop, delete, alter, or `CREATE DATABASE`.
   - **manage**: `USAGE ON CATALOG c`, `ALL ON DATABASE d`, `ALL ON ALL TABLES IN DATABASE d`
@@ -43,6 +44,7 @@ Catalog properties:
   - **MV manage**: `ALL` on the database and its materialized views
 - **Built-ins**: platform admins also get `user_admin`, `db_admin`, and `cluster_admin`.
 - **Visibility**: a user sees only the databases they have privileges on.
+- **Catalog metadata** (since 2026-11-11): StarRocks 4.1.7 checks `SELECT` on an external catalog's `information_schema` tables, which SQL clients (DBeaver's MySQL driver) query to list tables and columns; without it, product users got error 5203 ("SELECT privilege(s) on TABLE tables") although `SHOW TABLES` and queries worked. Every product role with `USAGE` on a catalog therefore holds `SELECT ON ALL TABLES IN DATABASE information_schema` there (`METADATA_DATABASE` in the bootstrap). The rows are filtered by the user's own privileges: a role with only this grant sees no table of any product (probed, and verified in Build and Test), so the shared catalogs reveal nothing across products. Platform admins already hold `ALL` on the catalogs.
 - **Polaris is the outer bound.** The shared catalog identity `srv-starrocks` is in every product's writer group, so drops through StarRocks are refused by Polaris, even for manage-level roles. Polaris's read set includes `NAMESPACE_READ_PROPERTIES`, because StarRocks loads namespace metadata when it opens a database.
 - **2026-11-09 migration of `default`**: catalog-wide grants were replaced by database-scoped ones. Writers and owners lost `CREATE DATABASE` on the catalogs, and developers gained MV authoring in dev (CR-2).
 
@@ -79,6 +81,7 @@ Catalog properties:
   - **Where the pattern is set**: it is a runtime setting. `fe.conf` would expand `${USER}` as an environment variable ("no such env variable: USER") and the FE would refuse to start, so `bootstrap-starrocks.py --runtime-only` sets it at every start and the user sync re-applies it.
 - **Command line**: `scripts/clients/starrocks-login.sh [--password-file FILE] <user>` uses a `mysql:9.7.2` container with `--enable-cleartext-plugin` and `--ssl-mode=VERIFY_IDENTITY` against the StarRocks CA. Service users use their password file under `.runtime/credentials/`.
 - **JDBC, DBeaver, and BI tools**: username and password with `sslMode=REQUIRED`, or `VERIFY_IDENTITY` with a truststore of the StarRocks CA. Connector/J 9.3.0 was verified with both; `DISABLED` is refused.
+- **Browsing in SQL clients**: leave the connection's default database empty (the session starts in `default_catalog`, whose `default_lh`, `default_lhuat` and `default_lhdev` are the materialized-view databases, not the Iceberg namespaces; DBeaver may draw them under whichever node is open). Iceberg tables are browsed in the catalogs or named `catalog.database.table`. Users reconnect after a grant change, because roles are read at login.
 - **Secret handling**: the password is read without echo or from a file, and reaches the client container only through `MYSQL_PWD` (copied by `docker run -e`). Nothing secret is printed or put in arguments. Host-side SQL passes the root password through `MYSQL_PWD`, copied by `docker exec -e`, never as an argument.
 
 ## Opt-out and failure behavior
@@ -97,10 +100,13 @@ Catalog properties:
 - P6: applying a user plan leaves every desired user with LDAP login and exactly its roles; native-password users are never changed.
 - P7: the catalog plan ignores the credential.
 - P8 (advisory): planning against the desired state is empty.
+- P9: a role holds the `information_schema` metadata grant on a catalog exactly when it holds `USAGE` there, only as `SELECT`, never on the database itself.
 
 The tests are in `tests/starrocks/`.
 
 ## Known limits and follow-ups
+- **Verified 2026-11-11 (metadata access)**: 10 metadata grants applied for `default`, then converged; a developer lists tables in all three catalogs, an analyst in prod only (uat and dev refused); a role with only the metadata grant sees nothing of `default`; the user confirmed DBeaver.
+- On 2026-11-11 a password login stayed broken for longer than five minutes after an FE restart, so the scheduled sync did not re-apply the bind pattern in time; check that the scheduled cycle reaches StarRocks (follow-up).
 - A new product becomes readable through StarRocks within about five minutes. The catalogs cache the `srv-starrocks` token, and its new writer-group role arrives at the next token renewal (Keycloak access tokens last 300 s).
 - Owner and platform-admin cannot drop Iceberg tables through StarRocks (accepted).
 - Reporting tools such as Power BI can now connect with a username and password over TLS (ODBC or JDBC). The user confirmed DBeaver and BI-tool logins on 2026-11-09.

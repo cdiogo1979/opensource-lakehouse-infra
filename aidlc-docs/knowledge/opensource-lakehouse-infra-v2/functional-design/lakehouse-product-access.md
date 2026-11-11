@@ -1,6 +1,6 @@
 # Functional Design — Lakehouse Product Access
 
-Current functional design of the data product access model across Keycloak, Polaris, RustFS, and the apps, and of product provisioning and user creation. For architecture, see [`../application-design.md`](../application-design.md). History: the [RustFS Keycloak OIDC intent archive](../../../archive/20261030-rustfs-keycloak-oidc/intent-summary.md) (where this file was relocated from the retired `hive-dremio-rustfs` knowledge) the [Data Product and User Scripts intent archive](../../../archive/20261109-data-product-and-user-scripts/intent-summary.md), the [StarRocks LDAP Login intent archive](../../../archive/20261109-starrocks-ldap-login/intent-summary.md), and the [Data Product Airflow Bundles intent archive](../../../archive/20261109-data-product-airflow-bundles/intent-summary.md).
+Current functional design of the data product access model across Keycloak, Polaris, RustFS, and the apps, and of product provisioning and user creation. For architecture, see [`../application-design.md`](../application-design.md). History: the [RustFS Keycloak OIDC intent archive](../../../archive/20261030-rustfs-keycloak-oidc/intent-summary.md) (where this file was relocated from the retired `hive-dremio-rustfs` knowledge) the [Data Product and User Scripts intent archive](../../../archive/20261109-data-product-and-user-scripts/intent-summary.md), the [StarRocks LDAP Login intent archive](../../../archive/20261109-starrocks-ldap-login/intent-summary.md), and the [Data Product Airflow Bundles intent archive](../../../archive/20261109-data-product-airflow-bundles/intent-summary.md), and the [Spark S3 Checkpoints intent archive](../../../archive/20261111-spark-s3-checkpoints/intent-summary.md) (checkpoint keys).
 
 ## Data products
 Each product is one file, `data-products/<name>.yaml`, validated by `infra/products/data_products.py`. `default` is the first product and cannot be removed.
@@ -129,7 +129,7 @@ The template gives every new product the same matrix. Developers author MVs in d
 - **Create or apply**: `scripts/operations/create-data-product.sh` (`--init <name>`, or apply `<file>` with `[--dry-run] [--no-restart]`).
   - Keycloak (`infra/keycloak/keycloak_products.py`): groups, Polaris client roles, the platform-admin owner mapping, and `srv-starrocks` in the writer group.
   - **Writer user**: created once, with the default password and its password file. The password is never reset. Bootstrap users (such as `srv-default-writer`) are left to `bootstrap-users.json`.
-  - Then RustFS, Polaris, the Polaris sync, StarRocks, the StarRocks sync, Jenkins (folder, permissions, and jobs; restarted when changed), the applied state, and Airflow (recreated when its bundles or writers changed and it is running).
+  - Then RustFS (buckets, policies, then checkpoint keys), Polaris, the Polaris sync, StarRocks, the StarRocks sync, Jenkins (folder, permissions, and jobs; restarted when changed), the applied state, and Airflow (recreated when its bundles or writers changed and it is running).
 - **Remove**: `scripts/operations/remove-data-product.sh <name> [--purge-data] [--yes] [--dry-run]`.
   - It refuses `default`. It lists Polaris tables and views, StarRocks MV-database objects, and bucket object versions, and the members who lose access (FD-Q2). It stops while any data exists unless `--purge-data`.
   - It asks for the typed name (or `--yes`) and backs up the file and state.
@@ -138,7 +138,7 @@ The template gives every new product the same matrix. Developers author MVs in d
     2. StarRocks MV databases (`FORCE`) and roles
     3. Polaris catalog and principal roles
     4. Polaris views and tables (dropped without purge; Polaris refuses purge), namespaces, and allowed locations
-    5. RustFS object versions, buckets, and policies, then the platform-admin policy
+    5. RustFS checkpoint keys (users, policies, files), then object versions, buckets, and policies, then the platform-admin policy
     6. the Keycloak writer user and password file, groups, and client roles
     7. both syncs, then deleting the file and state
     8. Airflow (its bundles and writer go; recreated when running)
@@ -153,7 +153,7 @@ The template gives every new product the same matrix. Developers author MVs in d
 
 ## Authorization layers
 1. **Identity**: Keycloak groups supply identity and role claims.
-2. **Catalog**: Polaris maps product role claims to principal roles and namespace-scoped grants. Polaris-mediated Iceberg access vends scoped, short-lived RustFS credentials. Workloads (Spark through Airflow or JupyterHub) never receive root or static RustFS credentials.
+2. **Catalog**: Polaris maps product role claims to principal roles and namespace-scoped grants. Polaris-mediated Iceberg access vends scoped, short-lived RustFS credentials. Workloads (Spark through Airflow or JupyterHub) never receive root RustFS credentials, and table data is reached only through Polaris vending. The one bounded exception is **checkpoint keys**: static, non-root, limited to `checkpoints/` of one bucket (see "Checkpoint keys" below).
 3. **Console**: RustFS console sessions carry the policies named by the user's `groups` claim. They govern direct object access in the console only.
 4. **SQL engine**: StarRocks reaches Polaris as `srv-starrocks`, a member of every writer group.
    - StarRocks roles, named after the groups, narrow each SQL user to their product's databases.
@@ -193,6 +193,30 @@ Product levels map as follows: `read` → read, `write` → read/write, `manage`
 - **Bootstrap**:
   - Product policies (and `role-platform-admin`) are owned by the product files and **converge**: missing ones are created, canonically equal ones accepted (order-insensitive comparison), and differing ones rewritten and verified.
   - A removal deletes the product's policies and rewrites the platform-admin policy.
+  - The canonical comparison sorts `Action`, `Resource` and condition values (operator → key → values), because RustFS returns condition values in its own order.
+
+## Checkpoint keys (`infra/rustfs/bootstrap-checkpoint-keys.py`)
+Streaming checkpoint access, separate from the console policies and from Polaris vending (how Spark uses the keys: `workload-python-environment.md`).
+
+**Entities** (one set per product environment bucket)
+- Canned policy `checkpoints-<bucket>`: exactly two allow statements, `s3:ListBucket` on the bucket with `StringLike` `s3:prefix` in `checkpoints`, `checkpoints/*`, and `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` on `<bucket>/checkpoints/*`. No wildcard bucket, no `ListAllMyBuckets`, no `admin:` action.
+- RustFS user `ckpt-<bucket>`, enabled, with exactly that policy attached (not a service account: no root parent). Its secret is generated (`secrets.token_urlsafe(40)`) and never printed.
+- Stored key `.runtime/credentials/checkpoint-keys/<bucket>` (folder 700, file 600) and staged copy `.runtime/container-mounts/checkpoint-keys/<bucket>` (folder 755, file 644; the parent `container-mounts` is 700), JSON `{"access_key", "secret_key"}`, written through a temporary file and renamed.
+- `.buckets.json` in the staged folder: product → environment → bucket for the Airflow DAG factory; no secrets.
+
+**Converge** (product bootstrap, `create-data-product.sh` after `bootstrap-policies.py`; idempotent)
+- The policy converges like the group policies. A missing user is `created`; a user whose stored key is missing or no longer authenticates (a signed listing of `checkpoints/`) is re-keyed (`rotated`); otherwise `unchanged`. The secret changes in RustFS first; files change only after that succeeded. The policy attachment is set every run, and a missing or different staged copy is rewritten.
+- A full run deletes staged files of buckets no longer in the product model. `--dry-run` writes nothing. `--check-staged` lists buckets without a staged key.
+
+**Delivery by role**
+- **Airflow**: each run container gets only its product environment's key: `prod` for `<product>-main`, `uat` for `<product>-uat` (`airflow-workflows.md`). Airflow never runs `dev`.
+- **Jupyter**: at spawn (`check_current_admission`), `checkpoint_buckets` selects the `dev` bucket of every product where the user's current groups include the owner or developer group; `checkpoint_key_volumes` mounts each staged file read-only at `/run/secrets/lakehouse-checkpoints/<bucket>`, checked through the Hub's read-only folder mount `/run/secrets/checkpoint-keys` and the host path `JUPYTERHUB_CHECKPOINT_KEYS_HOST_DIR`. Never a `uat` or `prod` key; analysts, writers and the platform administrator get none. A missing or symlinked file for an eligible bucket fails the spawn naming the bucket. Membership changes apply at the next server start.
+- A key belongs to a product environment, not to a person: code in a Jupyter server can read its dev keys, and a notebook and a dev stream with the same path share the checkpoint (accepted: dev is a sandbox).
+
+**Rotation and removal**
+- `./scripts/lakehouse.sh rotate-checkpoint-keys [--product FILE]` re-keys every selected bucket; the old secret is refused at once, so affected Airflow runs and Jupyter servers must restart.
+- `remove-data-product.sh` removes the product's users, then policies, then files, before its buckets; absent items are not an error. `default` can't be removed.
+- `scripts/lakehouse.sh start` warns and `start-airflow` refuses when a product bucket has no staged key; both create the staged folder first, so Docker never creates it. A full reset removes the keys with RustFS data and `.runtime/`.
 
 ## Failure behavior
 - **Keycloak unavailable**: new token issuance, group reconciliation, and new RustFS OIDC logins fail. Already-issued tokens and console sessions remain usable until expiry. Root break-glass access to RustFS is unaffected.
@@ -204,6 +228,7 @@ Product levels map as follows: `read` → read, `write` → read/write, `manage`
 - **Reconciler identity**: the reconciler and realm bootstrap currently use the protected local Keycloak bootstrap administrator. Replace it with a least-privilege identity before shared deployment.
 
 ## Verification
+- **Spark S3 Checkpoints (2026-11-11)**: host tests (fake RustFS: converge, idempotence, rotation order and failure, removal order, file modes, pruning, no secret in output; Hypothesis P1 policy scope, P2 Jupyter selection never `uat`, `prod` or non-member products); live: three keys created, re-run `unchanged`; `scripts/verify/checkpoint-keys.py` 27/27 (own `checkpoints/` write 200, read 200, list 200, delete 204; other prefix, whole listing, bucket list and the other buckets 403); rotation refused the old secret at once; a `joe-developer` server mounted only `bucket-default-dev`. Only `default` exists, so the cross-product case used `default`'s other environment buckets.
 - **Data Product Airflow Bundles (2026-11-09)**: writer selection per product verified live (`default`, and a test product sharing the repository); refusals for DAG IDs without a product, unknown DAGs, and a removed product; create and remove recreated Airflow, re-apply left it unchanged.
 - **StarRocks LDAP Login (2026-11-09)**:
   - five users migrated with groups and profile kept, signing in to Keycloak with the same password; a Jupyter home copied

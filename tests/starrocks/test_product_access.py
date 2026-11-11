@@ -21,6 +21,10 @@ def test_every_product_group_maps_to_its_role_and_platform_admin_is_kept():
 def test_product_roles_only_reach_their_own_databases():
     grants = bootstrap.role_grants(MODEL)
     for grant in grants:
+        if grant.object == "ALL TABLES IN DATABASE information_schema":
+            # The catalog's metadata tables: rows are filtered by the role's own privileges.
+            assert grant.privilege == "SELECT", grant
+            continue
         if grant.role.startswith("role_sales_") and grant.object != "CATALOG":
             assert grant.object.endswith(("sales_lh", "sales_lhuat", "sales_lhdev")), grant
         if grant.role.startswith("role_default_") and grant.object != "CATALOG":
@@ -101,3 +105,19 @@ def test_user_reconcile_does_not_require_roles_of_a_product_being_removed(monkey
     assert reconcile.missing_managed_roles(Runner()) == ["role_default_writer"]
     monkeypatch.setattr(reconcile, "MISSING_GROUPS", {"role-default-writer"})
     assert reconcile.missing_managed_roles(Runner()) == []
+
+
+def test_sql_client_metadata_grant_renders_parses_and_is_revoked_with_access():
+    grant = bootstrap.Grant("role_default_developer", "SELECT", "lakehouse_uat", "ALL TABLES IN DATABASE information_schema")
+    assert bootstrap.render_grant(grant) == (
+        "SET CATALOG `lakehouse_uat`;\nGRANT SELECT ON ALL TABLES IN DATABASE `information_schema` TO ROLE `role_default_developer`;"
+    )
+    rows = [{"Catalog": "lakehouse_uat", "Grants": "GRANT SELECT ON ALL TABLES IN DATABASE information_schema TO ROLE 'role_default_developer'"}]
+    assert bootstrap.parse_role_grants("role_default_developer", rows) == ({grant}, [])
+    grants = bootstrap.role_grants()
+    analyst = {g.catalog for g in grants if g.role == "role_default_analyst" and g.object == grant.object}
+    assert analyst == {"lakehouse"}  # analysts read prod only
+    assert {g.catalog for g in grants if g.role == "role_default_developer" and g.object == grant.object} == {"lakehouse", "lakehouse_uat", "lakehouse_dev"}
+    # A catalog dropped to "none" revokes the grant with USAGE.
+    plan = bootstrap.plan_grants({grant}, set(), ("role_default_developer",))
+    assert plan.revoke == [grant] and plan.add == []

@@ -1,6 +1,6 @@
 """Property-based tests for the StarRocks planners (P1-P8; PBT-02, 03, 07, 08, 09)."""
 
-from hypothesis import given, settings
+from hypothesis import given, settings, strategies as st
 
 from starrocks_strategies import (
     ROOT,
@@ -18,10 +18,11 @@ from starrocks_strategies import (
 def level_privileges(level, database):
     """BR-3: database-scoped grants of one product role in one catalog (no CREATE DATABASE)."""
     tables, db = f"ALL TABLES IN DATABASE {database}", f"DATABASE {database}"
+    metadata = ("SELECT", "ALL TABLES IN DATABASE information_schema")
     return {
-        "read": {("USAGE", "CATALOG"), ("SELECT", tables)},
-        "write": {("USAGE", "CATALOG"), ("SELECT", tables), ("CREATE TABLE", db), ("INSERT", tables)},
-        "manage": {("USAGE", "CATALOG"), ("ALL", db), ("ALL", tables)},
+        "read": {("USAGE", "CATALOG"), ("SELECT", tables), metadata},
+        "write": {("USAGE", "CATALOG"), ("SELECT", tables), ("CREATE TABLE", db), ("INSERT", tables), metadata},
+        "manage": {("USAGE", "CATALOG"), ("ALL", db), ("ALL", tables), metadata},
         "none": set(),
     }[level]
 
@@ -175,3 +176,20 @@ def test_p8_planning_the_desired_state_is_empty(member_map):
     desired = reconcile.desired_users(member_map)
     current = {n: reconcile.UserState(n, reconcile.LDAP_PLUGIN, r) for n, r in desired.items()}
     assert reconcile.plan_users(current, desired).is_empty()
+
+
+# P9 — the metadata grant follows USAGE exactly (s3: StarRocks metadata access, PBT-03)
+@settings(print_blob=True)
+@given(st.dictionaries(st.sampled_from([env.catalog for env in sr.ENVIRONMENTS]),
+                       st.tuples(st.sampled_from(["none", "read", "write", "manage"]), st.from_regex(r"[a-z][a-z0-9_]{1,20}", fullmatch=True)),
+                       min_size=1))
+def test_p9_the_metadata_grant_is_held_exactly_where_usage_is(levels):
+    grants = set()
+    for catalog, (level, database) in levels.items():
+        grants |= bootstrap._catalog_grants("role_x_developer", catalog, level, database)
+    for catalog in levels:
+        held = {(g.privilege, g.object) for g in grants if g.catalog == catalog}
+        has_usage = ("USAGE", "CATALOG") in held
+        assert (("SELECT", "ALL TABLES IN DATABASE information_schema") in held) == has_usage
+        assert {p for p, o in held if o == "ALL TABLES IN DATABASE information_schema"} <= {"SELECT"}
+        assert not any(o == "DATABASE information_schema" for _, o in held)

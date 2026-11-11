@@ -381,6 +381,10 @@ Service users (`srv-*-writer`) log in the same way, with the password in their f
    - Create a **StarRocks** connection to host `127.0.0.1`, port `9030`, with your username and password.
    - On the **SSL** tab, enable SSL (or set the driver property `sslMode=REQUIRED`).
 2. **Other JDBC and BI clients** (MySQL Connector/J, or ODBC): username and password, with `sslMode=REQUIRED`. The client sends the password with the MySQL clear-text authentication plugin, which these drivers use only over TLS.
+3. **Browsing catalogs** (SQL clients):
+   - Leave the connection's default database empty: the session starts in `default_catalog`. Its databases `default_lh`, `default_lhuat` and `default_lhdev` are the products' **materialized-view databases**, not the Iceberg namespaces; DBeaver's MySQL-style tree may show them under whichever node you opened.
+   - The Iceberg tables are in the catalogs `lakehouse` (prod), `lakehouse_uat` and `lakehouse_dev`, one database per product namespace. Browse them, or use fully qualified names: `SHOW TABLES FROM lakehouse_dev.default_lhdev;`, `SELECT * FROM lakehouse_uat.default_lhuat.tpch_region;`.
+   - Table lists come from each catalog's `information_schema`. Every product role may read it where it has catalog access, and its rows show only the databases and tables your roles grant, so other products' tables stay hidden.
 
 **Optional: verify the certificate.**
 - Import the CA:
@@ -400,6 +404,7 @@ Service users (`srv-*-writer`) log in the same way, with the password in their f
   - write adds `CREATE TABLE` and `INSERT`
   - manage is everything except dropping Iceberg tables (see [Known limitations](#known-limitations))
   - `role_platform_admin` manages the whole catalogs
+  - every product role with access to a catalog also reads that catalog's `information_schema` (filtered by its own privileges), which SQL clients use to list tables
 - **MV databases** (one per product and environment, levels from the file; for `default`):
   - the writer creates, refreshes, and drops materialized views in all three
   - developers do the same in dev, and read production and UAT

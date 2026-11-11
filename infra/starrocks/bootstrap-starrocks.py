@@ -107,6 +107,12 @@ def plan_catalog(existing: dict[str, str] | None, desired: dict[str, str]) -> Li
 
 # ---- Role grants (pure) ----
 
+# StarRocks checks SELECT on an external catalog's information_schema tables, which SQL
+# clients such as DBeaver query to list a database's tables; their rows are filtered by
+# the user's own privileges, so the grant reveals nothing the role can't already see.
+METADATA_DATABASE = "information_schema"
+
+
 def _catalog_grants(role: str, catalog: str, level: str, database: str | None = None) -> set[Grant]:
     """BR-3: database-scoped grants for a product role; catalog-wide when database is None."""
     if level == "none":
@@ -120,7 +126,7 @@ def _catalog_grants(role: str, catalog: str, level: str, database: str | None = 
             grants |= {Grant(role, "INSERT", catalog, tables), Grant(role, "CREATE TABLE", catalog, databases)}
         return grants
     tables, db = f"ALL TABLES IN DATABASE {database}", f"DATABASE {database}"
-    grants = {Grant(role, "USAGE", catalog, "CATALOG")}
+    grants = {Grant(role, "USAGE", catalog, "CATALOG"), Grant(role, "SELECT", catalog, f"ALL TABLES IN DATABASE {METADATA_DATABASE}")}
     if level == "manage":
         return grants | {Grant(role, "ALL", catalog, db), Grant(role, "ALL", catalog, tables)}
     grants.add(Grant(role, "SELECT", catalog, tables))
