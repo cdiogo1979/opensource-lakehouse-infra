@@ -75,7 +75,7 @@ Workflow JSON, task fields, subprojects and layers: [Airflow — workflow files]
 3. Each run starts its own Spark container, installs the extras, validates the config, runs your tasks in `runs_after` order, and writes as the product's writer.
 
 - **All tasks of a run share one Spark container**: tasks without `runs_after` start together; order them so only a few Spark jobs run at once.
-- **Arguments**: `args` are passed after `--` to the entry point and are never templated.
+- **Arguments**: `args` are passed after `--` to the entry point and are never templated. For one run, give a task extra or different arguments in the trigger form's `task_args`, for example `{"tpch_region_load": {"silver_lookback_days": "7"}}` ([how](../reference/airflow.md#workflow-files)).
 - More: [Airflow](../reference/airflow.md).
 
 ## 4. Spark sessions

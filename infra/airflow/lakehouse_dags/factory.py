@@ -24,6 +24,7 @@ from urllib.request import Request, urlopen
 
 import docker
 from airflow import DAG
+from airflow.sdk import Param
 from airflow.exceptions import AirflowException
 from airflow.providers.standard.operators.python import PythonOperator
 from airflow.task.trigger_rule import TriggerRule
@@ -31,6 +32,7 @@ from airflow.task.trigger_rule import TriggerRule
 from .identity import Identity
 from .redact import redact_spark_output
 from .spec import Workflow
+from .task_args import PARAM as TASK_ARGS_PARAM, check_task_args, effective_args, task_values
 
 CONTAINER_BUNDLE_ROOT = Path("/opt/lakehouse-bundle")
 # Staged checkpoint keys (infra/rustfs/bootstrap-checkpoint-keys.py): the read-only folder
@@ -159,7 +161,8 @@ def _create_spark_container(
     broker_ca_container_path: str,
     **context: object,
 ) -> dict[str, str]:
-    """Register the run with the broker and start its Spark container with the bundle mounted read-only."""
+    """Check the run's ``task_args``, then register the run with the broker and start its Spark container with the bundle mounted read-only."""
+    _check_run_task_args(**context)
     dag_id = context["dag"].dag_id
     container_name = _container_name(dag_id, str(context["run_id"]))
     docker_bundle_source = _docker_host_bundle_path(bundle_source)
@@ -287,8 +290,26 @@ def _validate_environment(environment: str, product: str, docker_url: str, **con
     _run_in_container(validate_command(environment, product), "Environment config check", docker_url, **context)
 
 
-def _submit_spark_job(entrypoint: str, environment: str, spark_master: str, args: list[str], docker_url: str, **context: object) -> None:
-    _run_in_container(submit_command(entrypoint, environment, spark_master, tuple(args)), f"Spark workload {entrypoint}", docker_url, **context)
+def _run_task_args(context: Mapping[str, Any]) -> Any:
+    params = context.get("params")
+    return params.get(TASK_ARGS_PARAM) if isinstance(params, Mapping) else None
+
+
+def _check_run_task_args(**context: object) -> None:
+    """Fail before anything starts when the run's ``task_args`` is invalid (Airflow doesn't check its content)."""
+    task_names = [task_id.removeprefix("submit_") for task_id in getattr(context["dag"], "task_ids", ()) if task_id.startswith("submit_")]
+    problems = check_task_args(_run_task_args(context), task_names)
+    if problems:
+        raise AirflowException("Invalid task_args for this run:\n" + "\n".join(problems))
+
+
+def _submit_spark_job(entrypoint: str, environment: str, spark_master: str, args: list[str], docker_url: str, task_name: str = "", **context: object) -> None:
+    values = task_values(_run_task_args(context), task_name)
+    run_args = effective_args(args, values)
+    LOGGER.info("Workflow arguments: %s", redact_spark_output(json.dumps(list(args))))
+    if values:
+        LOGGER.info("Effective arguments with this run's task_args: %s", redact_spark_output(json.dumps(run_args)))
+    _run_in_container(submit_command(entrypoint, environment, spark_master, tuple(run_args)), f"Spark workload {entrypoint}", docker_url, **context)
 
 
 def _stop_spark_container(docker_url: str, **context: object) -> None:
@@ -334,6 +355,16 @@ def dag_kwargs(workflow: Workflow, identity: Identity) -> dict[str, Any]:
         "catchup": False,
         "tags": [identity.bundle, "spark", *workflow.tags],
         "rerun_with_latest_version": False,
+        "params": {
+            TASK_ARGS_PARAM: Param(
+                {},
+                type="object",
+                description=(
+                    'Optional extra arguments per task for this run, for example {"' + workflow.tasks[0].name + '": {"argument": "value"}}. '
+                    "Each value replaces the same option in the task's workflow args. Tasks: " + names + "."
+                ),
+            )
+        },
     }
 
 
@@ -400,6 +431,7 @@ def build_dag(workflow: Workflow, bundle_root: Path, identity: Identity) -> DAG:
                 "spark_master": spark_master,
                 "args": list(task.args),
                 "docker_url": docker_url,
+                "task_name": task.name,
             },
             dag=dag,
             **_task_options(task),

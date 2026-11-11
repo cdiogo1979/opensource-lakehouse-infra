@@ -2,60 +2,48 @@
 
 ## Project Information
 - Project Type: Brownfield
-- Start Date: 2026-11-11T10:15:00Z
+- Start Date: 2026-11-11T18:00:00Z
 - Current Stage: DEPLOY - Deploy (approval pending)
-- Intent: Move the data products and data layout content out of docs/components.md into its own reference page, and state that AI-DLC is an adaptation of the AWS AI-DLC v1 workflow.
-- Intent ID: 20261111-data-products-reference
-- Previous Intent: aidlc-docs/archive/20261111-documentation-restructure (closed)
+- Intent: Enable task parameters in Airflow: values chosen when a DAG is triggered reach the workflow's tasks as task arguments.
+- Intent ID: 20261111-airflow-task-params
+- Previous Intent: aidlc-docs/archive/20261111-data-products-reference (closed)
 
 ## Workspace State
-- Existing code: Yes. Documentation-only change. Workspace root: /Users/carlosdiogo/code_repo/opensource-lakehouse-infra.
-- Reverse Engineering Needed: No; the previous intent's documentation analysis applies (archived).
+- Existing code: Yes. Workspace root: /Users/carlosdiogo/code_repo/opensource-lakehouse-infra.
+- Reverse Engineering Needed: No; focused read of infra/airflow/lakehouse_dags (factory.py, spec.py) and the canonical airflow-workflows design.
 
 ## Stage Progress
-- [x] Workspace Detection — brownfield; previous intent closed; small documentation intent.
-- [x] Requirements Analysis — minimal depth; approved on 2026-11-11.
+- [x] Workspace Detection — brownfield; previous intent closed.
+- [x] Requirements Analysis — approved on 2026-11-11 (per-task trigger values; replace on overlap; sample repo later).
 - [x] Workflow Planning — approved on 2026-11-11.
-- [x] Code Generation — page created, links repointed, AI-DLC origin added.
-- [x] Build and Test — links, moved content, pytest passed.
-- [ ] Deploy — pr_request.md written (no deployment); awaiting approval.
+- [x] Probe P1 — object Param works; Airflow doesn't validate its content.
+- [x] Code Generation — task_args.py, factory wiring, tests, docs.
+- [x] Build and Test — automated checks pass; live UAT runs passed (valid and invalid task_args).
+- [ ] Deploy — applied with start-airflow; pr_request.md written; closure approval pending.
 
 ## Extension Configuration
 | Extension | Enabled | Decided At |
 |---|---|---|
-| Security Baseline | No (documentation only) | Requirements Analysis |
-| Property-Based Testing | No (no code) | Requirements Analysis |
+| Security Baseline | Yes (trigger-time values reach product code) | Requirements Analysis |
+| Property-Based Testing | Yes (argument rendering) | Requirements Analysis |
 | Resiliency Baseline | No | Requirements Analysis |
 | Workflow Conventions | Yes (always enforced) | Workflow start |
 
 ## Follow-ups
-- Materialized-view authoring in the developer journey and query-rewrite verification.
-- Workflow params; per-workflow parallelism and Spark memory; Jupyter memory limit; vended-credential refresh for long writes; least-privilege reconciler identity; Hub restart on product model changes.
-
-## Current Status
-- Lifecycle Phase: VERIFICATION_COMPLETE
-- Current Stage: Deploy
-- Next Stage: Intent closure
-- Status: Awaiting approval of code generation, build and test, and the Deploy handoff.
+- Materialized-view authoring in the developer journey, query-rewrite verification, and a StarRocks credential for pipeline MV DDL.
+- Per-workflow parallelism and Spark memory; Jupyter memory limit; vended-credential refresh for long writes; least-privilege reconciler identity; Hub restart on product model changes.
 
 ## Intent Lifecycle
 <!-- intent-lifecycle:start -->
 ```json
 {
-  "archive": "aidlc-docs/archive/20261111-data-products-reference",
+  "archive": "aidlc-docs/archive/20261111-airflow-task-params",
   "current_stage": "DEPLOY - Deploy",
-  "intent_id": "20261111-data-products-reference",
-  "name": "Data Products Reference",
-  "previous_intent": "aidlc-docs/archive/20261111-documentation-restructure",
+  "intent_id": "20261111-airflow-task-params",
+  "name": "Airflow Task Parameters",
+  "previous_intent": "aidlc-docs/archive/20261111-data-products-reference",
   "status": "CLOSED",
-  "summary": "aidlc-docs/archive/20261111-data-products-reference/intent-summary.md"
+  "summary": "aidlc-docs/archive/20261111-airflow-task-params/intent-summary.md"
 }
 ```
 <!-- intent-lifecycle:end -->
-
-## Open Follow-ups (carried over)
-- **Developer journey: StarRocks materialized views** (user, 2026-11-11): a follow-up intent integrates MV authoring fully into the data product developer journey and verifies query rewrite acceleration for all users (CR-1 of 20261111-documentation-restructure).
-- **Transient bundle-refresh failure**: one task's Airflow bundle refresh hit "detected dubious ownership" on `tracking_repo` when two tasks started together (2026-11-10); not reproduced; investigate if it repeats.
-- **JupyterHub keeps the product model it started with**: the Hub imports `infra/products/data_products.py` once, through a single-file bind mount; after that file changes, the Hub fails closed on newer product files until it restarts (found and fixed by a restart on 2026-11-10). The product commands or `start` should restart the Hub when the file changes.
-- **Enforcing bundle class**: a later phase to stop Airflow parsing extra repository `.py` files under `dags/`. Since CR-6 (2026-11-10) Airflow scans only `dags/`, so this is limited to files there, which CI refuses.
-- **RustFS console**: adopt a RustFS release that bundles console v0.1.38 or later.

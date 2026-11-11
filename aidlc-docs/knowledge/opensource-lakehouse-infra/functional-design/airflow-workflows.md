@@ -26,6 +26,7 @@ Current functional design of the platform component that turns data product repo
 | `identity` | standard library | bundle name from the checkout path, then `(bundle, product, environment)` |
 | `factory` | Airflow, Docker SDK | `build_dag`, `LakehouseOperator`, and the task callables |
 | `redact` | standard library | `redact_spark_output` |
+| `task_args` | standard library | trigger-time task arguments: `check_task_args`, `task_values`, `effective_args`, `option_name` |
 | `validate` | standard library | `python3 -m lakehouse_dags.validate [ROOT]` |
 
 ## Rules
@@ -51,13 +52,14 @@ Current functional design of the platform component that turns data product repo
   - **Settings**: `dag_id` is `<bundle>-<name>`; tags are `{<bundle>, spark, *tags}`; `start_date` 2024-01-01 UTC; `catchup` false; `rerun_with_latest_version` false. The description defaults to the task list.
   - **Tasks**: `create_cluster`, then `install_requirements` (2 retries, 30 s apart), then `validate_environment`, then `submit_<task>` (after its `runs_after` predecessors, or after `validate_environment`), then `stop_cluster` (`ALL_DONE`), then `verify_workloads_succeeded`.
   - **Task options**: `retries`, `retry_delay` and `execution_timeout` are set on that task's `submit_` only.
+  - **Trigger-time task arguments**: every DAG has one param, `task_args` (`Param({}, type="object")`, description with an example and the task names): `{"<task>": {"<argument>": "<value>"}}`. Task names must be the workflow's; argument names `[a-z][a-z0-9_]{0,49}`; values printable strings of 1 to 500 characters; at most 20 per task. Airflow doesn't check the object's content (probe P1), so the factory does.
 - **Task code**:
   - **Templates**: every task is a `LakehouseOperator` (`template_fields = ()`), so `{{ conn.* }}` and `{{ var.* }}` in `args` are never rendered.
   - **Checkpoint key** (`_checkpoint_key_volume`, before the broker registration): the bucket of the run's product and environment comes from `/run/secrets/checkpoint-keys/.buckets.json` (product → environment → bucket, no secrets, written by the RustFS checkpoint key bootstrap, because the scheduler has no product model). The staged file must be a regular file, not a symlink; the host folder must be absolute and named `checkpoint-keys`. It becomes the one read-only mount `/run/secrets/lakehouse-checkpoints/<bucket>`, so a `-main` run holds only the `prod` key and a `-uat` run only the `uat` key. Any problem fails `create_cluster` before a run is registered or a container exists.
-  - **`create_cluster`**: registers `{dag_id, run_id}` with the broker over the pinned endpoint and CA. It starts `lakehouse-<dag_id[:40]>-<sha256(run_id)[:12]>` with the run's bundle checkout at `/opt/lakehouse-bundle` (read-only), the broker CA and the checkpoint key. The environment holds the token, run handle and capability, `LAKEHOUSE_ENVIRONMENT`, `LAKEHOUSE_PRODUCT`, and `PYTHONPATH=/opt/lakehouse-bundle`. If startup fails, it removes the container and revokes the run.
+  - **`create_cluster`**: first checks the run's `task_args` (all problems in one error, before the checkpoint key, the broker registration or any container); then registers `{dag_id, run_id}` with the broker over the pinned endpoint and CA. It starts `lakehouse-<dag_id[:40]>-<sha256(run_id)[:12]>` with the run's bundle checkout at `/opt/lakehouse-bundle` (read-only), the broker CA and the checkpoint key. The environment holds the token, run handle and capability, `LAKEHOUSE_ENVIRONMENT`, `LAKEHOUSE_PRODUCT`, and `PYTHONPATH=/opt/lakehouse-bundle`. If startup fails, it removes the container and revokes the run.
   - **`install_requirements`**: an `exec_run` in that container of `/opt/lakehouse/venv/bin/python /opt/lakehouse/workload_python.py install-extras /opt/lakehouse-bundle/requirements.txt --lock /opt/lakehouse/requirements.lock`: nothing without the file; otherwise the extras, constrained by the lock, into the container's venv, with the output redacted (rules in `workload-python-environment.md`).
   - **`validate_environment`**: an `exec_run` in that container of `/opt/lakehouse/venv/bin/python -c` with the repository's `notebooks/common/config_loader.load_environment_config(env, /opt/lakehouse-bundle/configs, product)`.
-  - **`submit_<task>`**: `spark-submit --master <LAKEHOUSE_SPARK_MASTER> /opt/lakehouse-bundle/notebooks/workload/[<project>/]<entrypoint> --environment <env> --config-dir /opt/lakehouse-bundle/configs`, then `--` and the `args` when there are any. Arguments are passed as a list, and the output is redacted.
+  - **`submit_<task>`**: `spark-submit --master <LAKEHOUSE_SPARK_MASTER> /opt/lakehouse-bundle/notebooks/workload/[<project>/]<entrypoint> --environment <env> --config-dir /opt/lakehouse-bundle/configs`, then `--` and the effective arguments when there are any: the workflow `args` with the run's `task_args` for this task applied (each value one `--<name>=<value>` token appended; the same option, as `--opt value` or `--opt=value`, removed from the workflow `args` first). Both lists are logged (redacted). Arguments are passed as a list, and the output is redacted.
   - **`stop_cluster`**: removes the container and revokes the broker run.
 - **Repository code never runs in the scheduler**: it runs only inside the run's Spark container. At parse time, the dag-processor imports only files under `dags/` (the bundles' `subdir`): the stub, and any other `.py` file a repository might add there, which CI refuses.
 - **Loading**: `load_workflows` validates every file first.
@@ -76,11 +78,13 @@ Current functional design of the platform component that turns data product repo
 - **Invalid workflow**: an import error naming every problem; the bundle has no DAGs until it's fixed.
 - **Non-product bundle**: an import error.
 - **Config check fails**: `validate_environment` fails with redacted output, then `stop_cluster` cleans up.
+- **Invalid `task_args`**: `create_cluster` fails naming every problem; nothing is registered or started.
 - **Broker refusal**: `create_cluster` fails (`unknown_product`, `unknown_dag`, `bundle_mismatch`), with no fallback identity.
 - **Checkpoint key missing or unsafe** (no index entry, missing or symlinked file, bad host folder or bucket name): `create_cluster` fails naming the bucket and the product bootstrap; nothing is registered or started. `start-airflow` refuses to start while any product bucket lacks a staged key.
 - **Observed once (2026-11-10)**: Airflow's per-task bundle refresh hit "detected dubious ownership" on `tracking_repo` when two tasks started together. It did not repeat, and the cause is not established.
 
 ## Verification and limits
+- **Verified 2026-11-11 (task parameters)**: host 608 passed, Airflow image 81 passed (param on every DAG; invalid `task_args` fail before registration or container; values reach only their task; property: render-then-parse gives trigger values once, workflow values otherwise). Live UAT: `{"tpch_region_load": {"silver_lookback_days": "1"}}` gave that task `--silver-lookback-days=1` (`lookback_days` 1), others unchanged; an unknown task and a non-string value failed at `create_cluster` with no container.
 - **Verified 2026-11-11 (Spark S3 checkpoints)**: host `tests/airflow` 71 passed (one key per environment; missing, symlinked, unindexed, unknown-product, bad host folder and bad bucket cases fail before registration); `default-uat-test_environment` 8/8 with only `/run/secrets/lakehouse-checkpoints/bucket-default-uat` (ro) mounted.
 - **Verified 2026-11-10 (shared workload requirements)**: Airflow image 51 passed (the `install_requirements` task, its command and retries, redaction); `default-uat-test_environment` 8/8 without extras; `default-uat-generate_tpch` 13/13 with extras; with `subdir`, only `dags/lakehouse.py` is parsed per bundle.
 - **Verified 2026-11-10 (DAG factory)**:
@@ -95,5 +99,6 @@ Current functional design of the platform component that turns data product repo
 - **Limits**:
   - parse-time execution of extra repository `.py` files until an enforcing bundle class exists (later phase);
   - single-container `local[*]` Spark;
-  - no templating in `args`;
+  - no templating in `args` or `task_args`;
+  - anyone who may trigger a DAG may set `task_args` (Airflow roles are platform-wide);
   - workload code runs on the shared Python 3.10 environment plus the repository's `requirements.txt` (see `workload-python-environment.md`).

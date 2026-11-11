@@ -233,8 +233,9 @@ class Ti:
         return self.state
 
 
-def context(state=None):
-    return {"dag": type("Dag", (), {"dag_id": "default-uat-test_environment"})(), "run_id": "manual__1", "ti": Ti(state)}
+def context(state=None, task_args=None):
+    dag = type("Dag", (), {"dag_id": "default-uat-test_environment", "task_ids": ["create_cluster", "submit_test_environment_first", "submit_count_sample_rows"]})()
+    return {"dag": dag, "run_id": "manual__1", "ti": Ti(state), "params": {"task_args": task_args}}
 
 
 def test_container_names_are_stable_and_docker_safe():
@@ -382,3 +383,35 @@ def test_a_layer_entrypoint_runs_from_the_subproject_layer_folder():
     submit = factory.build_dag(workflow, Path("/opt/airflow/dag_bundles/default-uat/tracking_repo"), IDENTITY).get_task("submit_count_sample_rows")
     command = factory.submit_command(submit.op_kwargs["entrypoint"], "uat", "local[*]")
     assert command[3] == "/opt/lakehouse-bundle/notebooks/workload/sample/ops/count_sample_rows.py"
+
+
+# --- Trigger-time task arguments (airflow-task-params FR-1 to FR-5) ---------------------
+
+
+def test_every_dag_offers_an_empty_task_args_param_naming_its_tasks(tmp_path):
+    dag = load(bundle(tmp_path))["dag_default_uat_test_environment"]
+    param = dag.params.get_param("task_args")
+    assert param.resolve() == {} and param.schema == {"type": "object"}
+    assert "test_environment_first, test_environment_second, count_sample_rows" in param.description
+
+
+def test_invalid_task_args_fail_create_cluster_before_any_container_or_registration(monkeypatch):
+    monkeypatch.setattr(factory, "_broker_request", lambda *a: pytest.fail("the run may not be registered"))
+    monkeypatch.setattr(factory.docker, "DockerClient", lambda base_url: pytest.fail("no container may be created"))
+    with pytest.raises(AirflowException) as error:
+        factory._create_spark_container("img", "net", "data", "unix://x", "/opt/airflow/dag_bundles/default-uat/versions/abc",
+                                        "uat", "default", "us-east-1", "/ca", "/run/ca", **context(task_args={"nope": {"x": "1"}, "count_sample_rows": {"date": 7}}))
+    assert "'nope' is not a task of this workflow" in str(error.value)
+    assert "task_args.count_sample_rows.date: must be a printable string" in str(error.value)
+
+
+def test_a_task_runs_with_its_trigger_values_replacing_the_same_option(monkeypatch, caplog):
+    container = FakeContainer()
+    monkeypatch.setattr(factory.docker, "DockerClient", lambda base_url: FakeDocker(container))
+    run = context({"container_name": "existing"}, task_args={"count_sample_rows": {"date": "2026-11-11", "mode": "full"}})
+    caplog.set_level("INFO")
+    factory._submit_spark_job("job.py", "uat", "local[*]", ["--date", "2026-11-10", "--x"], "unix://x", task_name="count_sample_rows", **run)
+    assert container.commands[-1][0][-4:] == ["--", "--x", "--date=2026-11-11", "--mode=full"]
+    assert "Effective arguments" in caplog.text
+    factory._submit_spark_job("job.py", "uat", "local[*]", ["--date", "2026-11-10"], "unix://x", task_name="test_environment_first", **run)
+    assert container.commands[-1][0][-3:] == ["--", "--date", "2026-11-10"]  # other tasks run as written
