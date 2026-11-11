@@ -205,5 +205,9 @@ def test_ldap_bind_pattern_is_set_at_runtime_not_in_fe_conf():
 
 def test_user_reconcile_re_applies_the_bind_pattern_after_its_safety_checks():
     # Build and Test finding: an FE restart resets the runtime bind pattern; the scheduled sync restores it.
+    # The full sync applies it after its safety checks; the scheduled cycle also runs
+    # --bind-pattern-only first, which needs neither Keycloak nor the product files.
     source = (ROOT / "infra/starrocks/reconcile-starrocks-users.py").read_text()
-    assert source.index("missing_managed_roles(runner)") < source.index("sr.ensure_ldap_login(runner)") < source.index("plan_users(read_starrocks_users(runner)")
+    main = source[source.index("def main("):]
+    assert main.index("missing_managed_roles(runner)") < main.index("sr.ensure_ldap_login(runner)") < main.index("plan_users(read_starrocks_users(runner)")
+    assert main.index("if args.bind_pattern_only:") < main.index("sr.require_products()")

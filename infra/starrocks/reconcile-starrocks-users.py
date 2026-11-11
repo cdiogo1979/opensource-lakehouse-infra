@@ -9,6 +9,9 @@ switched in place, keeping their grants and objects. Managed users who left ever
 product group are dropped. Root, built-in users, and native-password users are
 never changed. If Keycloak cannot be read, or returns no product-group members,
 nothing is applied.
+
+With --bind-pattern-only it only re-applies the LDAP bind pattern that an FE
+restart resets, so password logins recover even while the user sync is refused.
 """
 
 from __future__ import annotations
@@ -205,6 +208,25 @@ def parse_user_roles(statement: str) -> set[str]:
     return set(re.findall(r"'([^']+)'", match.group(1))) if match else set()
 
 
+def ensure_bind_pattern(transport: str, root_password_file: Path, dry_run: bool = False) -> int:
+    """Re-apply the LDAP bind pattern if the FE lost it; needs no Keycloak and no product files."""
+    try:
+        runner = sr.root_runner(transport, root_password_file)
+        if dry_run:
+            rows = runner.query("ADMIN SHOW FRONTEND CONFIG LIKE 'authentication_ldap_simple_bind_dn_pattern';", "read LDAP bind pattern")
+            state = "already-set" if rows and rows[0].get("Value") == sr.LDAP_BIND_DN_PATTERN else "would be set"
+        else:
+            state = sr.ensure_ldap_login(runner)
+    except sr.StarRocksError as error:
+        print(f"ERROR: StarRocks LDAP bind pattern check failed: {error}", file=sys.stderr)
+        return 1
+    if state == "set":
+        print("StarRocks LDAP bind pattern was missing (FE restart) and is set again.")
+    else:
+        print(f"StarRocks LDAP bind pattern: {state}.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--transport", choices=("docker", "network"), default="docker")
@@ -212,10 +234,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--keycloak-url", default="http://127.0.0.1:8080")
     parser.add_argument("--keycloak-admin-password-file", type=Path, default=sr.CREDENTIALS / "keycloak-admin-password")
     parser.add_argument("--root-password-file", type=Path, default=sr.CREDENTIALS / "starrocks-root-password")
+    parser.add_argument("--bind-pattern-only", action="store_true", help="only re-apply the LDAP bind pattern after an FE restart")
     args = parser.parse_args(argv)
     if not sr.starrocks_enabled():
         print("NOTICE: StarRocks is disabled (STARROCKS_ENABLED=false); skipping the StarRocks user reconcile.")
         return 0
+    if args.bind_pattern_only:
+        return ensure_bind_pattern(args.transport, args.root_password_file, args.dry_run)
     try:
         sr.require_products()
     except sr.StarRocksError as error:

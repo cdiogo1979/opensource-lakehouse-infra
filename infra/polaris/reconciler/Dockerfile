@@ -15,4 +15,6 @@ RUN chmod 0755 ./run.sh
 
 # Product files are mounted read-only and read on every cycle.
 ENV LAKEHOUSE_DATA_PRODUCTS_DIR=/opt/lakehouse/data-products
-ENTRYPOINT ["/opt/lakehouse/run.sh"]
+# compose.core.yml mounts the current platform code over these copies (read-only), so the
+# cycle always runs the repository's product model and scripts; sh runs the mounted run.sh.
+ENTRYPOINT ["/bin/sh", "/opt/lakehouse/run.sh"]

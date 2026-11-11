@@ -145,12 +145,26 @@ services:
       - ./data-products:/opt/lakehouse/data-products:ro
       # StarRocks requires TLS; the sync verifies the FE certificate.
       - ./.runtime/container-mounts/starrocks-ca.crt:/run/certs/starrocks-ca.crt:ro
+      # The current platform code over the image's copies, so a product-model change can't
+      # leave the reconciler stale (it read an old model and refused every cycle until 2026-11-11).
+      - ./infra/products/data_products.py:/opt/lakehouse/products/data_products.py:ro
+      - ./infra/polaris/reconcile-keycloak-groups.py:/opt/lakehouse/polaris/reconcile-keycloak-groups.py:ro
+      - ./infra/starrocks/starrocks_common.py:/opt/lakehouse/starrocks/starrocks_common.py:ro
+      - ./infra/starrocks/reconcile-starrocks-users.py:/opt/lakehouse/starrocks/reconcile-starrocks-users.py:ro
+      - ./infra/polaris/reconciler/run.sh:/opt/lakehouse/run.sh:ro
     networks: [core]
     depends_on:
       keycloak:
         condition: service_healthy
       polaris:
         condition: service_healthy
+    # Unhealthy when no cycle fully succeeded within two intervals plus a minute.
+    healthcheck:
+      test: ["CMD", "sh", "-c", "f=/tmp/reconcile-last-success; test -f $$f && test $$(( $$(date +%s) - $$(cat $$f) )) -le $$(( 2 * $${RECONCILE_INTERVAL_SECONDS:-300} + 60 ))"]
+      interval: 60s
+      timeout: 10s
+      retries: 1
+      start_period: 180s
     profiles: [scheduled-reconciliation]
     restart: unless-stopped
 

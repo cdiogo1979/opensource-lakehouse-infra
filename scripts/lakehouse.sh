@@ -69,6 +69,9 @@ show_status() {
     state="$(service_state "$service")"
     printf '%-16s %s\n' "$service" "$state"
   done
+  # The scheduled sync (optional profile): unhealthy means no cycle succeeded lately.
+  state="$(docker inspect --format '{{.State.Status}}{{if .State.Health}} ({{.State.Health.Status}}){{end}}' lakehouse-local-polaris-group-reconciler-1 2>/dev/null || true)"
+  if [[ -n "$state" ]]; then printf '%-16s %s\n' "reconciler" "$state"; fi
 }
 
 wait_for_services() {

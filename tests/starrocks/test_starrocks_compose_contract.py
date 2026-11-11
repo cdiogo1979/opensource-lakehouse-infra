@@ -77,6 +77,7 @@ def test_password_login_replaces_the_token_helper():
     assert "--enable-cleartext-plugin" in login and "--ssl-mode=VERIFY_IDENTITY" in login
     assert 'MYSQL_PWD="$password" docker run' in login and "-e MYSQL_PWD" in login and "read -r -s" in login
     assert "token" not in login.lower().replace("tty", "")
-    readme = (ROOT / "README.md").read_text()
-    assert "**DBeaver and other JDBC clients**" in readme and "starrocks-token.sh" not in readme
-    assert "idTokenFile" not in readme
+    # The documentation: the README and the docs/ pages (StarRocks details are in docs/reference/starrocks.md).
+    docs = (ROOT / "README.md").read_text() + "".join(page.read_text() for page in sorted((ROOT / "docs").rglob("*.md")))
+    assert "DBeaver and other JDBC clients" in (ROOT / "docs/reference/starrocks.md").read_text()
+    assert "starrocks-token.sh" not in docs and "idTokenFile" not in docs
