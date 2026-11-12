@@ -27,11 +27,13 @@
 <!-- intent-lifecycle:start -->
 ```json
 {
+  "archive": "aidlc-docs/archive/20261112-built-image-os-upgrades",
   "current_stage": "DEPLOY",
   "intent_id": "20261112-built-image-os-upgrades",
   "name": "Built Image OS Upgrades",
   "previous_intent": "aidlc-docs/archive/20261112-scan-fixable-only",
-  "status": "IN_PROGRESS"
+  "status": "CLOSED",
+  "summary": "aidlc-docs/archive/20261112-built-image-os-upgrades/intent-summary.md"
 }
 ```
 <!-- intent-lifecycle:end -->
