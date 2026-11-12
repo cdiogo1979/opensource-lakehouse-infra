@@ -14,7 +14,9 @@
 
 ## Stage Progress
 - [x] Workspace Detection — brownfield; previous intent closed; working tree clean.
-- [ ] Requirements Analysis — questions pending.
+- [x] Requirements Analysis (CR-1), probes P1, P2 — approved on 2026-11-12.
+- [x] Code Generation, Build and Test — tests and workflow run passed.
+- [x] Deploy — pushed 3d4355d; workflow run 43195694537 success.
 
 ## Extension Configuration
 | Extension | Enabled | Decided At |
@@ -27,11 +29,13 @@
 <!-- intent-lifecycle:start -->
 ```json
 {
-  "current_stage": "INCEPTION - Requirements Analysis",
+  "archive": "aidlc-docs/archive/20261112-infra-vulnerability-coverage",
+  "current_stage": "DEPLOY - Deploy",
   "intent_id": "20261112-infra-vulnerability-coverage",
   "name": "Infra Vulnerability Coverage",
   "previous_intent": "aidlc-docs/archive/20261112-stop-reconciler",
-  "status": "IN_PROGRESS"
+  "status": "CLOSED",
+  "summary": "aidlc-docs/archive/20261112-infra-vulnerability-coverage/intent-summary.md"
 }
 ```
 <!-- intent-lifecycle:end -->
