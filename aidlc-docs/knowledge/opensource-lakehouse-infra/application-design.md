@@ -283,7 +283,7 @@ It lists what it will delete first. The product files in `data-products/` are ke
 - `scripts/lakehouse.sh` adds `compose.starrocks.yml` to the module file list when enabled (see [Compose modules](#compose-modules)).
 - `start` prepares the TLS material, starts FE and BE, and runs `bootstrap-starrocks.py --runtime-only` (root password once, BE registration, LDAP bind pattern).
 - The product bootstrap runs `bootstrap-starrocks.py` (catalogs, MV databases, roles) and `reconcile-starrocks-users.py`.
-- `status` and `stop` include StarRocks, and `reconcile-starrocks [--dry-run]` runs the user sync on demand.
+- `status` and `stop` include StarRocks and the scheduled reconciler (stopped first; `start` starts it last once the product bootstrap has set it up), and `reconcile-starrocks [--dry-run]` runs the user sync on demand.
 - The reset removes both StarRocks volumes and the network.
 
 **Identities**

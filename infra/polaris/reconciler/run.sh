@@ -11,6 +11,9 @@ if [ "$interval" -lt 1 ]; then
 fi
 # The healthcheck reads this file: its age is the time since the last fully successful cycle.
 success_file="${RECONCILE_SUCCESS_FILE:-/tmp/reconcile-last-success}"
+# The shell is PID 1, which ignores SIGTERM unless it has a handler: exit on stop instead of
+# waiting to be killed. The sleep runs in the background so the signal is handled at once.
+trap 'echo "Reconciler stopping"; exit 0' TERM INT
 
 while :; do
   ok=true
@@ -51,5 +54,6 @@ while :; do
   if [ "$ok" = true ]; then
     date +%s > "$success_file"
   fi
-  sleep "$interval"
+  sleep "$interval" &
+  wait $!
 done

@@ -9,7 +9,7 @@ Reference for platform admins: status, reset, backup, secrets, and the bootstrap
 ./scripts/lakehouse.sh stop     # stops them; volumes and data are kept
 ```
 
-`stop` also removes running Jupyter user servers. Their home volumes are kept. Avoid `docker compose ... down -v`: it deletes volumes.
+`stop` stops the scheduled reconciler first, then the modules and core; `start` starts the reconciler again last, once the product bootstrap has set it up. `stop` also removes running Jupyter user servers. Their home volumes are kept. Airflow has its own `start-airflow` and `stop-airflow`. Avoid `docker compose ... down -v`: it deletes volumes.
 
 ## Reset the platform
 

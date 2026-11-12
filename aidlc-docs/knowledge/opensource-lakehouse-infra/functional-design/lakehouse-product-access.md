@@ -167,7 +167,7 @@ These layers are independent:
 
 **Reconcilers**:
 - Both read every product file and change nothing while a file is invalid.
-- **Scheduled cycle** (`polaris-group-reconciler`, profile `scheduled-reconciliation`, every `POLARIS_GROUP_RECONCILE_INTERVAL_SECONDS`, default 300): the StarRocks bind-pattern step, the Polaris group sync, then the StarRocks user sync. The container runs the repository's current code (mounted read-only), so it can't fall behind the product model, and records each fully successful cycle; its healthcheck is unhealthy after two intervals plus a minute without one, shown by `lakehouse.sh status` (`reconciler`).
+- **Scheduled cycle** (`polaris-group-reconciler`, profile `scheduled-reconciliation`, every `POLARIS_GROUP_RECONCILE_INTERVAL_SECONDS`, default 300): the StarRocks bind-pattern step, the Polaris group sync, then the StarRocks user sync. The container runs the repository's current code (mounted read-only), so it can't fall behind the product model, and records each fully successful cycle; its healthcheck is unhealthy after two intervals plus a minute without one, shown by `lakehouse.sh status` (`reconciler`). The product bootstrap sets it up; after that `lakehouse.sh stop` stops it first and `start` starts it last. Its loop traps SIGTERM, so it stops at once with status 0.
 - A product group missing from Keycloak (a product being removed) counts as empty. Its roles are taken from everyone, the platform administrator included, and are no longer required in StarRocks.
 
 ## RustFS console policies (`infra/rustfs/bootstrap-policies.py`)

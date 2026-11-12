@@ -39,6 +39,10 @@ if [[ "$STARROCKS_ENABLED" == true ]]; then MODULE_FILES+=(-f compose.starrocks.
 # ${arr[@]+...} keeps an empty array safe under set -u in bash 3.2.
 COMPOSE=(docker compose -f compose.core.yml ${MODULE_FILES[@]+"${MODULE_FILES[@]}"})
 AIRFLOW_COMPOSE=("${COMPOSE[@]}" -f compose.airflow.yml --profile airflow)
+# The scheduled reconciler (Keycloak groups to Polaris and StarRocks) is set up by the product
+# bootstrap; once it exists, start and stop manage it with the rest of the stack.
+RECONCILER_COMPOSE=(docker compose -f compose.core.yml --profile scheduled-reconciliation)
+reconciler_exists() { docker inspect lakehouse-local-polaris-group-reconciler-1 >/dev/null 2>&1; }
 
 usage() { echo "Usage: scripts/lakehouse.sh {start|status|stop|start-airflow|airflow-status|stop-airflow|reconcile-starrocks [--dry-run]|rotate-checkpoint-keys [--product FILE]|reset [--yes|--dry-run]}" >&2; }
 
@@ -141,6 +145,11 @@ start_stack() {
     echo "StarRocks is ready. SQL: 127.0.0.1:${STARROCKS_QUERY_PORT:-9030} (log in with scripts/clients/starrocks-login.sh <user>)."
   else
     echo "NOTICE: StarRocks is disabled (STARROCKS_ENABLED=false); not started."
+  fi
+  if reconciler_exists; then
+    "${RECONCILER_COMPOSE[@]}" up -d polaris-group-reconciler
+  else
+    echo "NOTICE: the scheduled reconciler is not set up yet; scripts/bootstrap-default-product.sh starts it."
   fi
   echo "Core providers are ready. Keycloak: http://127.0.0.1:${KEYCLOAK_HOST_PORT:-8080}; Polaris: http://127.0.0.1:${POLARIS_HOST_PORT:-8181}; RustFS console: http://127.0.0.1:${RUSTFS_CONSOLE_HOST_PORT:-9001}."
   if [[ "$JUPYTER_ENABLED" == true ]]; then echo "JupyterHub: http://jupyterhub.localhost:${JUPYTERHUB_HOST_PORT}"; fi
@@ -268,11 +277,13 @@ case "${1:-}" in
       # These containers have separately named home volumes; omitting -v retains user data.
       docker rm --force $user_servers >/dev/null
     fi
+    # First, so it doesn't run its cycle against services that are stopping.
+    if reconciler_exists; then "${RECONCILER_COMPOSE[@]}" stop polaris-group-reconciler; fi
     if [[ "$STARROCKS_ENABLED" == true ]]; then "${COMPOSE[@]}" stop starrocks-be starrocks-fe; fi
     if [[ "$JENKINS_ENABLED" == true ]]; then "${COMPOSE[@]}" stop jenkins; fi
     if [[ "$JUPYTER_ENABLED" == true ]]; then "${COMPOSE[@]}" stop jupyterhub; fi
     "${COMPOSE[@]}" stop keycloak polaris rustfs ldap polaris-db keycloak-db
-    echo "Enabled modules and core services stopped; named volumes and RustFS objects were preserved."
+    echo "The scheduled reconciler, enabled modules and core services stopped; named volumes and RustFS objects were preserved."
     ;;
   *) usage; exit 2 ;;
 esac

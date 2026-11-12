@@ -112,3 +112,22 @@ def test_partial_module_commands_never_suggest_removing_other_modules():
     for script in ("scripts/lakehouse.sh", "scripts/bootstrap-default-product.sh"):
         text = (ROOT / script).read_text()
         assert "export COMPOSE_IGNORE_ORPHANS=true" in text and "--remove-orphans" not in text.replace("suggest --remove-orphans", ""), script
+
+
+def test_stop_stops_the_scheduled_reconciler_first_and_start_brings_it_back():
+    """stop-reconciler: the reconciler stops before the services it reads and starts after them, once it exists."""
+    lakehouse = (ROOT / "scripts/lakehouse.sh").read_text()
+    stop = lakehouse[lakehouse.index("  stop)\n"):]
+    stop = stop[:stop.index(";;")]
+    assert 'if reconciler_exists; then "${RECONCILER_COMPOSE[@]}" stop polaris-group-reconciler; fi' in stop
+    assert stop.index("stop polaris-group-reconciler") < stop.index("stop starrocks-be") < stop.index("stop keycloak polaris")
+    start = lakehouse[lakehouse.index("start_stack() {"):lakehouse.index("prepare_airflow_environment() {")]
+    assert start.index('"${RECONCILER_COMPOSE[@]}" up -d polaris-group-reconciler') > start.index('up -d "${STARROCKS_SERVICES[@]}"')
+    assert "reconciler_exists()" in lakehouse and "--profile scheduled-reconciliation" in lakehouse
+
+
+def test_the_reconciler_loop_exits_on_stop_instead_of_being_killed():
+    """stop-reconciler: PID 1 sh traps SIGTERM and sleeps interruptibly, so docker stop doesn't wait for the kill."""
+    run = (ROOT / "infra/polaris/reconciler/run.sh").read_text()
+    assert "trap 'echo \"Reconciler stopping\"; exit 0' TERM INT" in run
+    assert 'sleep "$interval" &\n  wait $!' in run
