@@ -2,24 +2,21 @@
 
 ## Project Information
 - Project Type: Brownfield
-- Start Date: 2026-11-12T13:45:00Z
-- Current Stage: INCEPTION - Requirements Analysis (questions pending)
-- Intent: Replace the Spark runtime's base image (tabulario/spark-iceberg, 255 of the 291 critical findings) with the official Apache Spark image.
-- Intent ID: 20261112-spark-base-image
-- Previous Intent: aidlc-docs/archive/20261112-jupyter-vulnerabilities (closed)
-
-## Workspace State
-- Existing code: Yes; clean tree. infra/spark-runtime/Dockerfile; users: Airflow runs (factory), the Jupyter single-user image (copies /opt/spark, the JDK), smoke-spark.sh, role-matrix.py, checkpoint-stream.sh, workload-python-parity.sh.
+- Start Date: 2026-11-12T16:00:00Z
+- Current Stage: CONSTRUCTION - Code Generation
+- Intent: When an image leaves the scan (replaced, renamed or removed), close its Code scanning alerts and its dependency-graph snapshot, so alerts reflect only what the platform uses.
+- Intent ID: 20261112-scan-stale-targets
+- Previous Intent: aidlc-docs/archive/20261112-spark-base-image (closed)
 
 ## Stage Progress
-- [x] Workspace Detection — clean; previous intent closed.
-- [x] Requirements Analysis — approved on 2026-11-12.
-- [x] Code Generation, Build and Test — images, tests, parity, Trivy, live checks passed.
+- [x] Workspace Detection — clean tree.
+- [x] Requirements Analysis — the user approved item 1 with all proposed tests and recommendations ("lets proceed with 1, proceed with all you prpoposed tests and recommendations"); item 2 (scan built images) not in scope.
+- [ ] Code Generation
 
 ## Extension Configuration
 | Extension | Enabled | Decided At |
 |---|---|---|
-| Security Baseline | Yes (runtime of every Spark job) | Requirements Analysis |
+| Security Baseline | No (reporting; same permissions) | Requirements Analysis |
 | Property-Based Testing | No | Requirements Analysis |
 | Resiliency Baseline | No | Requirements Analysis |
 
@@ -27,13 +24,11 @@
 <!-- intent-lifecycle:start -->
 ```json
 {
-  "archive": "aidlc-docs/archive/20261112-spark-base-image",
-  "current_stage": "DEPLOY - Deploy",
-  "intent_id": "20261112-spark-base-image",
-  "name": "Spark Base Image",
-  "previous_intent": "aidlc-docs/archive/20261112-jupyter-vulnerabilities",
-  "status": "CLOSED",
-  "summary": "aidlc-docs/archive/20261112-spark-base-image/intent-summary.md"
+  "current_stage": "CONSTRUCTION - Code Generation",
+  "intent_id": "20261112-scan-stale-targets",
+  "name": "Scan Stale Targets",
+  "previous_intent": "aidlc-docs/archive/20261112-spark-base-image",
+  "status": "IN_PROGRESS"
 }
 ```
 <!-- intent-lifecycle:end -->
