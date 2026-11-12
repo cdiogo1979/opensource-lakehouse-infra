@@ -54,3 +54,22 @@ The complete audit history through intent `20261112-scan-stale-targets` is prese
 **Email**: cdiogo@gmail.com
 
 ---
+
+## First Workflow Run Failed (built images)
+**Timestamp**: 2026-11-12T19:10:00Z
+**User Input**: (pasted the run log: every lakehouse-* target "FAILED (PermissionError)"; external images and the lock uploaded; closed earlier targets: airflow-3.3.2-python3.10, alpine-3.22, jenkins-lts-jdk21, jupyterhub, maven-3.9.9-eclipse-temurin-17, python-3.10-slim-bookworm, python-3.12-alpine, singleuser, spark-3.5.9-scala2.12-java17-python3-ubuntu, spark-iceberg-3.5.5_1.8.1)
+**AI Response**: "Cause: the scanner rewrote Trivy's report in place to rename the export path; on Linux the Trivy container writes it as root, so the runner user can't (macOS Docker Desktop maps ownership, so local runs passed). Fix: write the renamed report to <name>.named.json and convert from it; failures now print the error and the free disk. Regression test with read-only Trivy outputs. 662 tests passed, 3 skipped. Second commit; push awaits approval."
+**Context**: DEPLOY; APG-01.
+**User**: cdiogo1979
+**Email**: cdiogo@gmail.com
+
+---
+
+## Correction: test counts
+**Timestamp**: 2026-11-12T19:15:00Z
+**AI Response**: "The full suite before the fix had 661 passed, 3 skipped (reported earlier, and in commit 4aaaf5e's message, as 663); after the fix 662 passed, 3 skipped. State, summary and PR description corrected; the pushed commit message is left as is."
+**Context**: DEPLOY; APG-03.
+**User**: cdiogo1979
+**Email**: cdiogo@gmail.com
+
+---

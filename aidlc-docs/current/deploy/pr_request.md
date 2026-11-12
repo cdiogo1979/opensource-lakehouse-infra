@@ -10,6 +10,6 @@ The vulnerability workflow scanned the upstream bases of the images built here (
 - Docs: vulnerability alerts, workload Python, future work (Spark on Kubernetes would need its jars back).
 
 ## Verification
-663 tests passed, 3 skipped; parity OK; a Spark job reads and writes Parquet, ORC and Iceberg; live: checkpoint streaming (Polaris, RustFS, token provider) and the `default-uat-test_environment` DAG run succeeded. Dry-run scan: Spark runtime critical 23 -> 5 (Spark-bundled Netty, Avro 1.7.7, jackson-mapper-asl).
+661 tests passed, 3 skipped; parity OK; a Spark job reads and writes Parquet, ORC and Iceberg; live: checkpoint streaming (Polaris, RustFS, token provider) and the `default-uat-test_environment` DAG run succeeded. Dry-run scan: Spark runtime critical 23 -> 5 (Spark-bundled Netty, Avro 1.7.7, jackson-mapper-asl).
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)

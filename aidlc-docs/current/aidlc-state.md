@@ -13,7 +13,7 @@
 - [x] Requirements Analysis — approved ("approved and continue").
 - [x] Workflow Planning — minimal, inline: one unit (Spark runtime image + scan tooling + workflow + docs); User Stories, Application/Functional/NFR/Infrastructure Design skipped (changes inside existing component boundaries).
 - [x] Code Generation — Spark runtime Dockerfile; list-images.py `targets()`; vulnerability-scan.py `--build` with export scanning; workflow on ubuntu-24.04-arm; guard tests; docs.
-- [x] Build and Test — 663 tests passed (3 skipped); runtime and single-user rebuilt; parity OK; Spark smoke (Parquet, ORC, Iceberg) OK; dry-run scan of 15 targets OK; live checks passed (checkpoint stream, UAT DAG, Jupyter by the user). Approved.
+- [x] Build and Test — 661 tests passed (3 skipped); runtime and single-user rebuilt; parity OK; Spark smoke (Parquet, ORC, Iceberg) OK; dry-run scan of 15 targets OK; live checks passed (checkpoint stream, UAT DAG, Jupyter by the user). Approved.
 
 ## Extension Configuration
 | Extension | Enabled | Decided At |
