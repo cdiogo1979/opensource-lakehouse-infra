@@ -1,0 +1,49 @@
+{
+  "intent_id": "20261112-scan-alert-locations",
+  "name": "Scan Alert Locations",
+  "objective": "Code scanning alerts point at the pinning line, one per package, with a clear first line.",
+  "date": "2026-11-12",
+  "scope": "Included: vulnerability-scan.py SARIF rewrite, tests, vulnerability-alerts docs. Excluded: what is scanned.",
+  "workstreams": [
+    "supply-chain"
+  ],
+  "verification": {
+    "status": "passed",
+    "details": "construction/build-and-test/build-and-test-summary.md: 652 passed, 3 skipped; dry runs."
+  },
+  "artifact_inventory_complete": true,
+  "summary": {
+    "major_requirements": [
+      "FR-1 location at the pinning line.",
+      "FR-2 one alert per package.",
+      "FR-3 message headline.",
+      "FR-4 docs."
+    ],
+    "design_decisions": [
+      "Fingerprint excludes the installed version so an alert persists until fixed."
+    ],
+    "implementation_decisions": [
+      "relocate() parses Trivy's message fields; library/ and docker.io/ prefixes recognized as the image itself."
+    ],
+    "deviations": [
+      "Pre-approved small intent."
+    ],
+    "superseded_decisions": [
+      "Trivy's own SARIF locations."
+    ]
+  },
+  "canonical_updates": [],
+  "artifacts": [
+    "aidlc-docs/current/inception",
+    "aidlc-docs/current/construction",
+    "aidlc-docs/current/deploy",
+    "scripts/verify/vulnerability-scan.py",
+    "tests/operations/test_vulnerability_scan.py",
+    "docs/reference/vulnerability-alerts.md"
+  ],
+  "cleanup_paths": [
+    "aidlc-docs/current/inception",
+    "aidlc-docs/current/construction",
+    "aidlc-docs/current/deploy"
+  ]
+}
