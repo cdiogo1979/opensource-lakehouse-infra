@@ -2,25 +2,24 @@
 
 ## Project Information
 - Project Type: Brownfield
-- Start Date: 2026-11-12T17:00:00Z
-- Current Stage: DEPLOY - Intent closure (approval pending)
-- Intent: (1) Scan the images the platform builds instead of their upstream bases; (2) remove the compiler toolchain (and kernel headers) from the Spark runtime; (3) remove the Spark jars the platform doesn't use.
-- Intent ID: 20261112-spark-image-hardening
-- Previous Intent: aidlc-docs/archive/20261112-scan-stale-targets (closed)
+- Start Date: 2026-11-12T20:30:00Z
+- Current Stage: DEPLOY - Intent closure
+- Intent: Code scanning shows only findings with a released fix (item 1 of the cleanup plan).
+- Intent ID: 20261112-scan-fixable-only
+- Previous Intent: aidlc-docs/archive/20261112-spark-image-hardening (closed)
 
 ## Stage Progress
 - [x] Workspace Detection — clean tree.
-- [x] Requirements Analysis — approved ("approved and continue").
-- [x] Workflow Planning — minimal, inline: one unit (Spark runtime image + scan tooling + workflow + docs); User Stories, Application/Functional/NFR/Infrastructure Design skipped (changes inside existing component boundaries).
-- [x] Code Generation — Spark runtime Dockerfile; list-images.py `targets()`; vulnerability-scan.py `--build` with export scanning; workflow on ubuntu-24.04-arm; guard tests; docs.
-- [x] Build and Test — 661 tests passed (3 skipped); runtime and single-user rebuilt; parity OK; Spark smoke (Parquet, ORC, Iceberg) OK; dry-run scan of 15 targets OK; live checks passed (checkpoint stream, UAT DAG, Jupyter by the user). Approved.
-
-- [x] Deploy — pushed 4aaaf5e and 7944f36; run 43263410488 success.
+- [x] Requirements Analysis — recommended decisions accepted in advance by the user.
+- [x] Workflow Planning — minimal, inline: one unit (vulnerability-scan.py, tests, docs); design stages skipped.
+- [x] Code Generation — fixable_only() before relocation; log counts; docs.
+- [x] Build and Test — 663 passed, 3 skipped; dry run 2 382 uploaded, 1 492 left out.
+- [x] Deploy — committed on main; push awaits approval (together with intent 2).
 
 ## Extension Configuration
 | Extension | Enabled | Decided At |
 |---|---|---|
-| Security Baseline | Yes (runtime attack surface; CI builds) | Requirements Analysis |
+| Security Baseline | Yes (vulnerability reporting) | Requirements Analysis |
 | Property-Based Testing | No | Requirements Analysis |
 | Resiliency Baseline | No | Requirements Analysis |
 
@@ -28,13 +27,11 @@
 <!-- intent-lifecycle:start -->
 ```json
 {
-  "archive": "aidlc-docs/archive/20261112-spark-image-hardening",
   "current_stage": "DEPLOY",
-  "intent_id": "20261112-spark-image-hardening",
-  "name": "Spark Image Hardening and Built-Image Scanning",
-  "previous_intent": "aidlc-docs/archive/20261112-scan-stale-targets",
-  "status": "CLOSED",
-  "summary": "aidlc-docs/archive/20261112-spark-image-hardening/intent-summary.md"
+  "intent_id": "20261112-scan-fixable-only",
+  "name": "Code Scanning Fixable Findings Only",
+  "previous_intent": "aidlc-docs/archive/20261112-spark-image-hardening",
+  "status": "IN_PROGRESS"
 }
 ```
 <!-- intent-lifecycle:end -->
