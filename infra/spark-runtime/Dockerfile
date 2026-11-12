@@ -48,6 +48,20 @@ RUN /usr/bin/python3 -m venv /opt/lakehouse/venv \
  && /opt/lakehouse/venv/bin/python /opt/lakehouse/workload_python.py check-venv /opt/lakehouse/venv/bin/python \
     --lock /opt/lakehouse/requirements.lock
 COPY infra/workload-python/lakehouse-platform.pth /opt/lakehouse/venv/lib/python3.10/site-packages/lakehouse-platform.pth
+# A smaller runtime (spark-image-hardening): the base's compiler toolchain (gcc, headers, Perl,
+# X11 and image libraries) isn't needed, since the platform installs prebuilt wheels only; and
+# Spark here runs local[*] on Iceberg's REST catalog, so Hive (and Derby), ZooKeeper/Curator
+# (standalone-master HA) and the Kubernetes, YARN and Mesos cluster managers are removed.
+# hive-storage-api stays: Spark's ORC support needs it.
+RUN apt-mark manual netbase >/dev/null \
+ && apt-get purge --yes --auto-remove linux-libc-dev \
+ && rm -rf /var/lib/apt/lists/* /opt/spark/yarn \
+ && cd /opt/spark/jars \
+ && find . -maxdepth 1 \( -name 'hive-*.jar' ! -name 'hive-storage-api-*.jar' -o -name 'spark-hive_*.jar' -o -name 'spark-hive-thriftserver_*.jar' \
+      -o -name 'derby-*.jar' -o -name 'zookeeper*.jar' -o -name 'curator-*.jar' -o -name 'spark-kubernetes_*.jar' -o -name 'kubernetes-*.jar' \
+      -o -name 'spark-yarn_*.jar' -o -name 'hadoop-yarn-server-web-proxy-*.jar' -o -name 'spark-mesos_*.jar' -o -name 'mesos-*.jar' \) -delete \
+ && ! dpkg -s linux-libc-dev gcc >/dev/null 2>&1 \
+ && /usr/bin/python3 --version && java -version 2>&1 | head -1 && /opt/spark/bin/spark-submit --version 2>&1 | grep -m1 -o "version 3\.5\.[0-9]*"
 RUN env PYTHONPATH=/opt/lakehouse-bundle /opt/lakehouse/venv/bin/python -c "import lakehouse_spark, lakehouse_broker_client"
 ENV PYSPARK_PYTHON=/opt/lakehouse/venv/bin/python \
     PYSPARK_DRIVER_PYTHON=/opt/lakehouse/venv/bin/python \

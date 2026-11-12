@@ -37,7 +37,7 @@ Today the platform is one Docker Compose project on one machine, so every compon
 
 | What it would add | How it would fit |
 |---|---|
-| Spark that scales with the work: executors started per job and released after it | Spark on Kubernetes (driver and executor pods), instead of `local[*]` in one container; this also removes the shared-container memory limit of a DAG run |
+| Spark that scales with the work: executors started per job and released after it | Spark on Kubernetes (driver and executor pods), instead of `local[*]` in one container; this also removes the shared-container memory limit of a DAG run. The Spark runtime image would need Spark's Kubernetes jars back (removed as unused) |
 | Airflow tasks as separate pods | Airflow's Kubernetes executor, so tasks no longer compete inside the scheduler |
 | Jupyter servers with their own resource requests and limits | JupyterHub's KubeSpawner |
 | Horizontal scaling of stateless services and StarRocks | Replicas and autoscalers for Polaris, Keycloak, the token brokers and StarRocks compute nodes; cluster autoscaling for the nodes |

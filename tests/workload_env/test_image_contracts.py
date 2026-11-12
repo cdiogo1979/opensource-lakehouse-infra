@@ -143,3 +143,16 @@ def test_the_runtime_image_adds_pinned_s3a_jars_with_strict_checksums_and_jupyte
     assert "COPY --from=token-provider-build /build/s3a/hadoop-aws-3.3.4.jar /build/s3a/aws-java-sdk-bundle-1.12.262.jar /opt/spark/jars/" in RUNTIME
     # The Jupyter image takes /opt/spark, jars included, from the runtime image.
     assert "COPY --from=spark-runtime /opt/spark /opt/spark" in JUPYTER
+
+
+def test_the_runtime_drops_the_build_toolchain_and_the_unused_spark_modules():
+    """spark-image-hardening FR-2, FR-3: no compilers or kernel headers; no Hive, Derby, ZooKeeper or cluster managers."""
+    assert "apt-mark manual netbase" in RUNTIME and "apt-get purge --yes --auto-remove linux-libc-dev" in RUNTIME
+    assert "! dpkg -s linux-libc-dev gcc" in RUNTIME  # the build fails if they come back
+    for pattern in ("hive-*.jar", "spark-hive_*.jar", "spark-hive-thriftserver_*.jar", "derby-*.jar", "zookeeper*.jar", "curator-*.jar",
+                    "spark-kubernetes_*.jar", "kubernetes-*.jar", "spark-yarn_*.jar", "hadoop-yarn-server-web-proxy-*.jar", "spark-mesos_*.jar", "mesos-*.jar"):
+        assert f"-name '{pattern}'" in RUNTIME, pattern
+    assert "! -name 'hive-storage-api-*.jar'" in RUNTIME  # Spark's ORC support needs it
+    assert "rm -rf /var/lib/apt/lists/* /opt/spark/yarn" in RUNTIME
+    defaults = (ROOT / "infra/jupyter/singleuser/spark-defaults.conf").read_text(encoding="utf-8")
+    assert "hive" not in defaults.lower() and "k8s" not in defaults.lower()
