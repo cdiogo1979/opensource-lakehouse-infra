@@ -200,7 +200,7 @@ It's meant for one machine: see [Security](docs/security.md) for every layer, th
 The most important ones; all of them, with workarounds, are in [Known limitations](docs/reference/limitations.md).
 
 - **Local only**: browser logins use plain HTTP and the default password `ChangeM3!` is published. Do not expose this stack beyond your machine.
-- **Pinned to arm64 (Apple silicon)**: the JupyterHub and Jupyter user-server base images are pinned to arm64-only digests, the user server's `JAVA_HOME` is the arm64 JDK, and the workload Python environment accepts only aarch64 wheels; everything else is multi-architecture. Running on x86_64 needs those re-pinned ([details](docs/reference/limitations.md)).
+- **Pinned to arm64 (Apple silicon)**: the Jupyter user server's `JAVA_HOME` is the arm64 JDK, and the workload Python environment accepts only aarch64 wheels; the images themselves are multi-architecture. Running on x86_64 needs those changed ([details](docs/reference/limitations.md)).
 - **Memory on one machine**: all of an Airflow run's tasks share one Spark container (no per-workflow parallelism limit; order heavy tasks with `runs_after`), and a Jupyter server has 2 GiB (one Spark notebook at a time).
 - **Credential lifetimes**: an Airflow run renews its tokens for up to 24 hours, a Jupyter session follows its Keycloak sign-in (at most 10 hours), and a single Iceberg write should finish within about 50 minutes.
 - **Airflow**: roles are platform-wide, not per product; task arguments are fixed in the workflow file; adding or removing a product with a `repo` block restarts Airflow.

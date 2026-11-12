@@ -96,7 +96,14 @@ def test_jupyter_has_git_and_the_pinned_jupyterlab_git_extension():
     """CR-4: users clone product repositories in the terminal or with the Git sidebar."""
     assert "apt-get install --yes --no-install-recommends git" in JUPYTER
     pins = (JUPYTER_DIR / "requirements.txt").read_text(encoding="utf-8").split()
-    assert "jupyterlab-git==0.55.0" in pins and "jupyterlab==4.3.5" in pins
+    assert "jupyterlab-git==0.55.0" in pins
+
+
+def test_jupyterlab_and_notebook_come_from_the_base_and_are_never_downgraded():
+    """jupyter-vulnerabilities FR-2: no pin for them; the install is constrained to the base's versions."""
+    lines = [l.split("#")[0].strip().lower() for l in (JUPYTER_DIR / "requirements.txt").read_text(encoding="utf-8").splitlines()]
+    assert not [l for l in lines if l.split("==")[0].split(">")[0].split("<")[0] in ("jupyterlab", "notebook")]
+    assert "grep -iE '^(jupyterlab|notebook)==' > /tmp/base-pins.txt" in JUPYTER and "--constraint /tmp/base-pins.txt" in JUPYTER
 
 
 def test_both_images_put_the_platform_session_module_on_the_venv_path():

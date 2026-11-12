@@ -1,17 +1,23 @@
 FROM local/lakehouse-spark-runtime:3.5.5_1.10.2 AS spark-runtime
-FROM docker.io/jupyterhub/singleuser@sha256:def86b5a77bf6a69753454e32ad6c29e1772f48073793db62c91a19cf6c57cb7
+# jupyterhub/singleuser:6.1.1-7 (rebuilt 2026-11-07), multi-arch index digest.
+FROM docker.io/jupyterhub/singleuser@sha256:4f4b2240f6645834fe68358ac4b0c2e1fc4d0c70549910d682281fee352c3fd6
 
 USER root
 COPY --from=spark-runtime /opt/spark /opt/spark
 COPY --from=spark-runtime /usr/lib/jvm /usr/lib/jvm
 COPY --from=spark-runtime /etc/java-17-openjdk /etc/java-17-openjdk
 # git for the users' own clones, and the JupyterLab Git extension (requirements.txt) uses it.
+# Plus security updates the base digest doesn't have yet (Trivy: apt, libapt-pkg7.0).
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends git \
+    && apt-get install --yes --only-upgrade apt libapt-pkg7.0 \
     && rm -rf /var/lib/apt/lists/*
 COPY infra/jupyter/singleuser/requirements.txt /tmp/singleuser-requirements.txt
-RUN python -m pip install --no-cache-dir --requirement /tmp/singleuser-requirements.txt \
-    && rm /tmp/singleuser-requirements.txt \
+# The base's JupyterLab and notebook stay as shipped (patched upstream): they constrain the
+# install, so an extension that needs older ones fails the build instead of downgrading them.
+RUN python -m pip list --format=freeze | grep -iE '^(jupyterlab|notebook)==' > /tmp/base-pins.txt \
+    && python -m pip install --no-cache-dir --requirement /tmp/singleuser-requirements.txt --constraint /tmp/base-pins.txt \
+    && rm /tmp/singleuser-requirements.txt /tmp/base-pins.txt \
     && install -d -o jovyan -g users /home/jovyan/work
 
 # The shared workload Python environment (infra/workload-python), as in the Spark runtime:

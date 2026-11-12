@@ -1,5 +1,5 @@
-jupyterlab==4.3.5
-notebook==7.3.2
+# JupyterLab and notebook come from the base image (jupyterhub/singleuser), patched upstream;
+# never pin them here (a pin would downgrade them). The Dockerfile constrains the install to them.
 ipykernel==6.29.5
 jupytext==1.16.7
 jupyterlab-git==0.55.0

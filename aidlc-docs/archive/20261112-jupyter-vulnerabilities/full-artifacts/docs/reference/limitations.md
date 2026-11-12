@@ -1,0 +1,28 @@
+# Known limitations
+
+For everyone. Back to the [README](../../README.md).
+
+- **Local only**: browser logins use plain HTTP, and the default password is published. Do not expose this stack beyond your machine.
+- **Pinned to arm64 (Apple silicon)**: the platform is built and tested on arm64 Macs, and some components only work there as pinned:
+  - the Jupyter user server sets `JAVA_HOME=/usr/lib/jvm/java-17-openjdk-arm64`;
+  - the **workload Python environment** accepts only CPython 3.10 **aarch64** wheels (`manylinux2014_aarch64`, `manylinux_2_17` to `manylinux_2_31`; `PLATFORM_TAGS` in `infra/workload-python/workload_python.py`): the lock, a product's `requirements.txt` in CI, Airflow runs and Jupyter all use it, so a package without an aarch64 wheel can't be used.
+
+  The pinned images are multi-architecture (JupyterHub and the user server since their 6.1.1-7 digests, Keycloak, Polaris, Airflow, StarRocks, Jenkins, Postgres, Alpine, Python, the Spark base `tabulario/spark-iceberg`, and RustFS by tag). On an x86_64 machine: make `JAVA_HOME` architecture-neutral, switch the wheel tags to x86_64 and regenerate the lock with `scripts/setup/lock-workload-python.sh`.
+- **RustFS console bucket list**: for Keycloak users, the console's bucket-list page keeps reloading. This is upstream bug [rustfs/console#271](https://github.com/rustfs/console/issues/271). Open a bucket directly instead, for example <http://127.0.0.1:9001/rustfs/console/browser?bucket=bucket-default-dev>.
+- **No table drops through StarRocks**: StarRocks reaches Polaris at writer level, so not even owners can drop Iceberg tables through it. Drop tables through Spark or Polaris as an owner.
+- **StarRocks materialized views**: a materialized view keeps its author. A view made by hand stops refreshing if its author leaves every product group, and an owner must re-create it; views deployed from the repository belong to the writer. A changed view is rebuilt from scratch by the deploy (its first refresh runs again).
+- **Writers have no StarRocks password login**: `srv-<product>-writer` logs in to StarRocks only with a Keycloak token, so it can't be used from DBeaver; use an owner account to inspect deployed views.
+- **LDAP outage**: while the `ldap` service is down, Keycloak sign-ins and StarRocks password logins fail. Client service accounts, issued tokens, and open sessions keep working.
+- **StarRocks restart**: password logins fail for up to five minutes, until the scheduled cycle restores the LDAP bind pattern ([StarRocks — users](starrocks.md#users)).
+- **Jenkins scans, no webhooks**: Jenkins is reachable only on this machine, so it notices commits and pull requests by scanning (5 and 30 minutes). Pull request discovery is github.com only and unauthenticated (60 requests per hour for this machine), so many products with GitHub repositories would exhaust it. Pull requests from forks are not built.
+- **Reconciler identity**: the reconcilers use the Keycloak `admin` account. Use a narrower identity before any shared deployment.
+- **Platform-wide Airflow rights**: Airflow has no per-product permissions, so a product's Airflow roles apply to all of Airflow.
+- **Namespace names**: every product's namespace names are visible to anyone with access to a shared catalog.
+- **Adding or removing a data product restarts Airflow**: Airflow 3.3 reads its DAG bundle list only at startup, and the token broker reads its writers only at startup. So creating or removing a product with a `repo` block (or changing that block) recreates the Airflow containers, which interrupts running DAG runs (tasks run inside the scheduler with LocalExecutor). Use `--no-restart` and run `scripts/lakehouse.sh start-airflow` when nothing is running.
+- **One Spark container per DAG run**: all of a run's tasks share it, and there is no per-workflow parallelism limit; tasks without `runs_after` start together and can run it out of memory (exit 137). Order heavy tasks with `runs_after`.
+- **Jupyter memory**: a server has 2 GiB (`JUPYTERHUB_SINGLEUSER_MEMORY_LIMIT`); each notebook with a Spark session holds 1 to 1.5 GiB until its kernel shuts down, so run one Spark notebook at a time.
+- **Credential lifetimes**: an Airflow run renews its tokens for up to 24 hours; a Jupyter session follows its Keycloak sign-in (at most 10 hours, 30 minutes idle); Polaris storage credentials last one hour per table load (cached up to 10 minutes), and refresh within one long write is not verified, so keep a single write under about 50 minutes. Checkpoint keys don't expire.
+- **Workflow arguments are fixed**: task `args` come only from the workflow file; Airflow can't change them at trigger time.
+- **Unused images may be deleted**: on Rancher Desktop with Kubernetes enabled, images no container uses can be removed when the VM disk fills up. `start` and `start-airflow` rebuild or pull them. If an Airflow DAG run fails at `create_cluster` because `local/lakehouse-spark-runtime` is missing, run `scripts/lakehouse.sh start-airflow` to rebuild it.
+- **Product extras need PyPI**: runs, CI, and the Jupyter command fetch a product's extra packages from public PyPI each time; there is no private index or cache. Packages without a suitable aarch64 wheel can't be used (see the arm64 entry above). DuckDB also downloads its `tpch` extension at first use in each run.
+- **Public repositories only**: product repositories are read anonymously by Airflow and Jenkins, so they must be public (or reachable without credentials).
