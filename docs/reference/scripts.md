@@ -18,4 +18,6 @@ Reference: where the commands live. Back to the [README](../../README.md).
 
 Documentation: `python3 scripts/verify/docs-links.py` checks every relative link and anchor in `README.md` and `docs/`.
 
+Vulnerabilities: `python3 scripts/verify/list-images.py [--check]` lists the external images (and which aren't pinned by digest); `python3 scripts/verify/vulnerability-scan.py --dry-run --out DIR [--only NAME]` runs the Trivy scan of the [vulnerability workflow](vulnerability-alerts.md) locally without submitting.
+
 Tests: `python3 -m pytest -q tests` (`pytest.ini` adds the Hub modules' folder to the import path). The token broker's behavioral tests run inside its image (`scripts/verify/broker-unit-tests.sh`), and the DAG factory's Airflow-side tests inside the Airflow image (`scripts/verify/dag-factory-tests.sh`).

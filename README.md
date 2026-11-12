@@ -15,7 +15,7 @@
 7. [Security](#security) ([full page](docs/security.md))
 8. [All documentation](#all-documentation)
    - [Components in depth](docs/components.md)
-   - Reference: [Data products](docs/reference/data-products.md), [AI-DLC](docs/reference/aidlc.md), [Identity](docs/reference/identity.md), [Polaris](docs/reference/polaris.md), [RustFS](docs/reference/rustfs.md), [JupyterHub](docs/reference/jupyterhub.md), [Airflow](docs/reference/airflow.md), [StarRocks](docs/reference/starrocks.md), [Jenkins](docs/reference/jenkins.md), [Workload Python](docs/reference/workload-python.md), [Streaming checkpoints](docs/reference/streaming-checkpoints.md), [Operations](docs/reference/operations.md), [Scripts](docs/reference/scripts.md), [Known limitations](docs/reference/limitations.md)
+   - Reference: [Data products](docs/reference/data-products.md), [AI-DLC](docs/reference/aidlc.md), [Identity](docs/reference/identity.md), [Polaris](docs/reference/polaris.md), [RustFS](docs/reference/rustfs.md), [JupyterHub](docs/reference/jupyterhub.md), [Airflow](docs/reference/airflow.md), [StarRocks](docs/reference/starrocks.md), [Jenkins](docs/reference/jenkins.md), [Workload Python](docs/reference/workload-python.md), [Streaming checkpoints](docs/reference/streaming-checkpoints.md), [Operations](docs/reference/operations.md), [Scripts](docs/reference/scripts.md), [Vulnerability alerts](docs/reference/vulnerability-alerts.md), [Known limitations](docs/reference/limitations.md)
    - [Platform evolution](docs/evolution.md)
 9. [Known limitations](#known-limitations) ([full list](docs/reference/limitations.md))
 10. [Future work](#future-work) ([details](docs/future-work.md))
@@ -190,7 +190,7 @@ It's meant for one machine: see [Security](docs/security.md) for every layer, th
   - [JupyterHub](docs/reference/jupyterhub.md), [Airflow and the DAG factory](docs/reference/airflow.md), [StarRocks](docs/reference/starrocks.md), [Jenkins](docs/reference/jenkins.md)
   - [Workload Python environment](docs/reference/workload-python.md), [Streaming checkpoints](docs/reference/streaming-checkpoints.md)
   - [AI-DLC: the change workflow](docs/reference/aidlc.md)
-  - [Operations](docs/reference/operations.md), [Scripts](docs/reference/scripts.md), [Known limitations](docs/reference/limitations.md)
+  - [Operations](docs/reference/operations.md), [Scripts](docs/reference/scripts.md), [Vulnerability alerts](docs/reference/vulnerability-alerts.md), [Known limitations](docs/reference/limitations.md)
 - **Security**: [Security](docs/security.md) (identity, authorization, data access, workload isolation, transport, secrets, supply chain, verification, limits).
 - **History and plans**: [Platform evolution](docs/evolution.md) (the AI-DLC method and how the platform got here) and [Future work](docs/future-work.md).
 - **Design knowledge** (canonical, kept by AI-DLC): `aidlc-docs/knowledge/opensource-lakehouse-infra/`.

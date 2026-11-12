@@ -79,6 +79,7 @@ Details: [Identity](reference/identity.md).
 
 - **Pinned images and packages**: container base images are pinned by digest; StarRocks, Keycloak, Polaris, RustFS and Jenkins plugins by version; the workload Python environment by a full lock, installed from wheels only, with each image build failing if it differs from the lock; Maven downloads for the Spark image are checksum-verified.
 - **Product extras** are constrained by the platform lock and may never replace a locked version.
+- **Monitoring**: Dependabot alerts cover the repository's manifests, and a weekly and on-push workflow scans every external image and the workload lock with Trivy, submitting language packages to the dependency graph (Dependabot) and all findings, operating-system packages included, to Code scanning ([Vulnerability alerts](reference/vulnerability-alerts.md)).
 
 ## 8. Verification
 
