@@ -4,7 +4,7 @@ Reference: the Python and Spark that workload code runs on. Back to the [README]
 
 Workload code runs on the same Python 3.10 and the same packages everywhere: in each Airflow DAG run's Spark container and in the Jupyter kernel.
 
-- **The platform's packages**: `infra/workload-python/requirements.in` pins the top-level packages (PyYAML, requests, pandas, numpy, pyarrow, ipykernel, jupytext, ipywidgets); `requirements.lock` pins every package, dependencies included. PySpark is not in it: both images use the one in `/opt/spark`. Other packages of the Spark base image (such as scipy, matplotlib, pyiceberg) are not available to workload code unless added here.
+- **The platform's packages**: `infra/workload-python/requirements.in` pins the top-level packages (PyYAML, requests, pandas, numpy, pyarrow, ipykernel, jupytext, ipywidgets); `requirements.lock` pins every package, dependencies included. PySpark is not in it: both images use the one in `/opt/spark`. The Spark runtime is the official `apache/spark:3.5.9-scala2.12-java17-python3-ubuntu` image (Ubuntu 22.04, Java 17 at `/opt/java/openjdk`); its system Python packages are not available to workload code.
 - **Where it lives**: both `local/lakehouse-spark-runtime` and `local/lakehouse-jupyter-singleuser` hold `/opt/lakehouse/venv` with exactly the lock, and `PYSPARK_PYTHON` points at it. Each image build fails if the venv differs from the lock. The images also hold Hadoop S3A (`hadoop-aws` 3.3.4 and its AWS SDK bundle) for streaming checkpoints.
 - **Checks**: `scripts/verify/workload-python-parity.sh` checks that both built images hold the workspace lock and identical packages, and that Jupyter offers only the Lakehouse kernel.
 

@@ -7,7 +7,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LOCK="$ROOT_DIR/infra/workload-python/requirements.lock"
-RUNTIME_IMAGE="${LAKEHOUSE_SPARK_IMAGE:-local/lakehouse-spark-runtime:3.5.5_1.10.2}"
+RUNTIME_IMAGE="${LAKEHOUSE_SPARK_IMAGE:-local/lakehouse-spark-runtime:3.5.9_1.10.2}"
 JUPYTER_IMAGE="${LAKEHOUSE_JUPYTER_IMAGE:-local/lakehouse-jupyter-singleuser:6.1.1-spark}"
 VENV_PYTHON=/opt/lakehouse/venv/bin/python
 

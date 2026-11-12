@@ -104,7 +104,7 @@ start_stack() {
   fi
   python3 scripts/setup/prepare-runtime.py
   # Airflow runs and the Spark smoke checks use the shared Spark runtime image.
-  docker build -t local/lakehouse-spark-runtime:3.5.5_1.10.2 -f infra/spark-runtime/Dockerfile .
+  docker build -t local/lakehouse-spark-runtime:3.5.9_1.10.2 -f infra/spark-runtime/Dockerfile .
   if [[ "$JUPYTER_ENABLED" == true ]]; then
     python3 scripts/setup/prepare-jupyterhub-broker-certificates.py
     JUPYTERHUB_BROKER_CA_HOST_PATH="$ROOT_DIR/.runtime/container-mounts/jupyterhub-broker-ca.crt"
@@ -239,7 +239,7 @@ start_airflow() {
   wait_for_services keycloak polaris
   python3 infra/keycloak/bootstrap-realm.py \
     --airflow-secret-file .runtime/credentials/keycloak-airflow-client-secret
-  docker build -t local/lakehouse-spark-runtime:3.5.5_1.10.2 -f infra/spark-runtime/Dockerfile .
+  docker build -t local/lakehouse-spark-runtime:3.5.9_1.10.2 -f infra/spark-runtime/Dockerfile .
   "${AIRFLOW_COMPOSE[@]}" up --build -d airflow-api-server airflow-scheduler airflow-dag-processor airflow-triggerer airflow-token-broker
   if [[ "$fingerprint" != "$recorded" ]]; then
     "${AIRFLOW_COMPOSE[@]}" up -d --no-deps --force-recreate airflow-token-broker

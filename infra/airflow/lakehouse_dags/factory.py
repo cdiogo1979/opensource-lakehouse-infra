@@ -473,7 +473,7 @@ def build_dag(workflow: Workflow, bundle_root: Path, identity: Identity, views: 
         task_id="create_cluster",
         python_callable=_create_spark_container,
         op_kwargs={
-            "image": os.environ.get("LAKEHOUSE_SPARK_IMAGE", "local/lakehouse-spark-runtime:3.5.5_1.10.2"),
+            "image": os.environ.get("LAKEHOUSE_SPARK_IMAGE", "local/lakehouse-spark-runtime:3.5.9_1.10.2"),
             "network": docker_network,
             "data_network": os.environ.get("LAKEHOUSE_SPARK_DATA_NETWORK", "lakehouse-local_data-access"),
             "docker_url": docker_url,

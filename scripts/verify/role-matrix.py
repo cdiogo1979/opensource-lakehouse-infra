@@ -34,7 +34,7 @@ ROLES = ("developer", "analyst", "owner", "writer")
 KEYCLOAK_BASE = "http://127.0.0.1:8080"
 POLARIS_BASE = "http://127.0.0.1:8181"
 CLIENTS_FILE = ROOT / ".runtime" / "container-mounts" / "role-matrix-clients.json"
-SPARK_IMAGE = "local/lakehouse-spark-runtime:3.5.5_1.10.2"
+SPARK_IMAGE = "local/lakehouse-spark-runtime:3.5.9_1.10.2"
 
 
 class CheckError(Exception):

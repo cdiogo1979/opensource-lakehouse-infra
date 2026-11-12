@@ -18,9 +18,9 @@ One pinned Python 3.10 environment, identical in `local/lakehouse-spark-runtime`
 
 ## Environment
 - **Location**: `/opt/lakehouse/venv` (Python 3.10.16) in both images, with `/opt/lakehouse/requirements.lock` and `/opt/lakehouse/workload_python.py`. `PYSPARK_PYTHON` and `PYSPARK_DRIVER_PYTHON` point at the venv; in the runtime image the venv is first on `PATH`.
-- **Spark runtime**: the venv is built from the base image's `/usr/local/bin/python3` (Debian 11, glibc 2.31). The base image's own packages stay in `/usr/local` and are not visible to workload code.
+- **Spark runtime**: the venv is built from the official Spark image's `/usr/bin/python3` (Python 3.10.12, Ubuntu 22.04, glibc 2.35; `python3.10-venv` added at build). The image's system Python packages are not visible to workload code.
 - **Jupyter**: Python 3.10.16 from conda-forge at `/opt/lakehouse/python3.10` (not on `PATH`), built with `HOME=/root`; JupyterLab stays on conda's Python 3.13. The only kernel is `python3`, display name "Lakehouse (Python 3.10)", on the venv (`kernel.json`); `/etc/jupyter/jupyter_server_config.d/lakehouse-kernels.json` sets `KernelSpecManager.ensure_native_kernel = false` and leaves the base image's `jupyter_server_config.py` in place. The image also has `git` and `jupyterlab-git` 0.55.0 (with `nbdime`).
-- **PySpark**: from `/opt/spark/python` (Spark 3.5.5), never from pip.
+- **PySpark**: from `/opt/spark/python` (Spark 3.5.9), never from pip.
 - **Hadoop S3A**: `hadoop-aws` 3.3.4 and `aws-java-sdk-bundle` 1.12.262 in `/opt/spark/jars` of the runtime image (Maven `--strict-checksums`; they match the image's Hadoop client 3.3.4), inherited by the Jupyter image with `/opt/spark`. Used only for streaming checkpoints (see "Streaming checkpoints").
 - **Platform modules**: `/opt/lakehouse/python` in both images, on the venv's `sys.path` through `lakehouse-platform.pth`, whatever `PYTHONPATH` is (Airflow run containers set it to the bundle only). Both builds check the import. Jupyter's `PYTHONPATH` is `/opt/spark/python` and py4j only. JupyterLab has `jupyterlab_widgets` 3.0.17, matching the kernel's.
 

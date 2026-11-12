@@ -61,9 +61,12 @@ class HubConfigContractTests(unittest.TestCase):
         self.assertIn("not ca_container_path.is_file()", spawner)
         self.assertNotIn("not ca_host_path.is_file()", spawner)
 
-    def test_singleuser_image_copies_java_security_configuration(self):
+    def test_singleuser_image_copies_the_whole_jdk_with_its_configuration(self):
+        """spark-base-image FR-4: Temurin keeps conf/ and security in /opt/java/openjdk; the path is architecture-neutral."""
         dockerfile = (ROOT / "infra/jupyter/singleuser/Dockerfile").read_text()
-        self.assertIn("COPY --from=spark-runtime /etc/java-17-openjdk /etc/java-17-openjdk", dockerfile)
+        self.assertIn("COPY --from=spark-runtime /opt/java/openjdk /opt/java/openjdk", dockerfile)
+        self.assertIn("JAVA_HOME=/opt/java/openjdk", dockerfile)
+        self.assertNotIn("arm64", dockerfile)
 
 
 if __name__ == "__main__":

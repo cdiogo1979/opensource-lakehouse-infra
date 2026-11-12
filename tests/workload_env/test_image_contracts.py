@@ -27,7 +27,14 @@ def test_both_images_install_exactly_the_lock_and_fail_the_build_otherwise():
 
 
 def test_the_runtime_venv_comes_first_on_path_and_is_built_from_the_base_python():
-    assert "/usr/local/bin/python3 -m venv /opt/lakehouse/venv" in RUNTIME
+    assert "/usr/bin/python3 -m venv /opt/lakehouse/venv" in RUNTIME and "python3.10-venv" in RUNTIME
+
+
+def test_the_runtime_is_the_official_spark_image_pinned_and_run_as_root():
+    """spark-base-image FR-1, FR-3."""
+    assert re.search(r"FROM apache/spark:3\.5\.9-scala2\.12-java17-python3-ubuntu@sha256:[0-9a-f]{64}\n", RUNTIME)
+    assert re.search(r"FROM maven:[\w.-]+@sha256:[0-9a-f]{64} AS token-provider-build", RUNTIME)
+    assert "tabulario" not in RUNTIME and "\nUSER root\n" in RUNTIME
     assert "PATH=/opt/lakehouse/venv/bin:${PATH}" in RUNTIME
 
 
@@ -70,7 +77,8 @@ def test_the_lock_generator_uses_the_runtime_base_image():
     text = script.read_text(encoding="utf-8")
     expression = re.search(r"sed -n '([^']+)'", text).group(1)
     found = subprocess.run(["sed", "-n", expression, str(ROOT / "infra/spark-runtime/Dockerfile")], capture_output=True, text=True, check=True).stdout.strip()
-    assert found.startswith("tabulario/spark-iceberg:") and "@sha256:" in found
+    assert found.startswith("apache/spark:") and "@sha256:" in found
+    assert "--user root" in text and "python3.10-venv" in text
     assert f"FROM {found}" in RUNTIME
     assert "--only-binary=:all:" in text and "env -u PYTHONPATH" in text and "check-lock" in text
 
@@ -88,7 +96,7 @@ def test_the_parity_verifier_compares_both_images_with_the_workspace_lock():
     script = ROOT / "scripts/verify/workload-python-parity.sh"
     assert os.access(script, os.X_OK)
     text = script.read_text(encoding="utf-8")
-    assert "local/lakehouse-spark-runtime:3.5.5_1.10.2" in text and "local/lakehouse-jupyter-singleuser:6.1.1-spark" in text
+    assert "local/lakehouse-spark-runtime:3.5.9_1.10.2" in text and "local/lakehouse-jupyter-singleuser:6.1.1-spark" in text
     assert "check-venv" in text and 'cmp -s "$LOCK"' in text and "diff -u" in text and "Lakehouse (Python 3.10)" in text
 
 

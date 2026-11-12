@@ -97,8 +97,8 @@ def test_module_combinations_render(tmp_path):
 
 
 def test_spark_smoke_checks_use_the_current_runtime_image():
-    assert 'IMAGE="${SPARK_BOOTSTRAP_IMAGE:-local/lakehouse-spark-runtime:3.5.5_1.10.2}"' in (ROOT / "scripts/bootstrap/smoke-spark.sh").read_text()
-    assert 'SPARK_IMAGE = "local/lakehouse-spark-runtime:3.5.5_1.10.2"' in (ROOT / "scripts/verify/role-matrix.py").read_text()
+    assert 'IMAGE="${SPARK_BOOTSTRAP_IMAGE:-local/lakehouse-spark-runtime:3.5.9_1.10.2}"' in (ROOT / "scripts/bootstrap/smoke-spark.sh").read_text()
+    assert 'SPARK_IMAGE = "local/lakehouse-spark-runtime:3.5.9_1.10.2"' in (ROOT / "scripts/verify/role-matrix.py").read_text()
     for job in ("infra/spark-bootstrap/create_smoke_tables.py", "infra/spark-bootstrap/verify_role_matrix.py"):
         assert '".rest.auth.type": "oauth2"' in (ROOT / job).read_text(), job
 

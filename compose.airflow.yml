@@ -28,7 +28,7 @@ x-airflow-common: &airflow-common
     LAKEHOUSE_BROKER_CA_HOST_PATH: ${LAKEHOUSE_BROKER_CA_HOST_PATH:?Set by scripts/lakehouse.sh}
     LAKEHOUSE_BROKER_CA_CONTAINER_PATH: /run/certs/airflow-token-broker-ca.crt
     LAKEHOUSE_CHECKPOINT_KEYS_HOST_DIR: ${LAKEHOUSE_CHECKPOINT_KEYS_HOST_DIR:?Set by scripts/lakehouse.sh}
-    LAKEHOUSE_SPARK_IMAGE: ${LAKEHOUSE_SPARK_IMAGE:-local/lakehouse-spark-runtime:3.5.5_1.10.2}
+    LAKEHOUSE_SPARK_IMAGE: ${LAKEHOUSE_SPARK_IMAGE:-local/lakehouse-spark-runtime:3.5.9_1.10.2}
     LAKEHOUSE_SPARK_DOCKER_NETWORK: lakehouse-local_airflow-spark
     LAKEHOUSE_SPARK_DATA_NETWORK: lakehouse-local_data-access
     AIRFLOW_BROKER_CONTROL_TOKEN_FILE: /run/secrets/airflow_broker_control_token

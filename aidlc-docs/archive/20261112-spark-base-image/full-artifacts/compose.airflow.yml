@@ -1,0 +1,257 @@
+# Airflow module: workload control plane and writer token broker. Used together with
+# compose.core.yml by scripts/lakehouse.sh start-airflow, airflow-status, and stop-airflow.
+x-airflow-common: &airflow-common
+  image: local/lakehouse-airflow:3.3.2
+  build:
+    context: ./infra/airflow
+    dockerfile: Dockerfile
+  user: "${AIRFLOW_UID:?Set by scripts/lakehouse.sh}:0"
+  environment: &airflow-environment
+    AIRFLOW_HOME: /opt/airflow
+    AIRFLOW_UID: ${AIRFLOW_UID:?Set by scripts/lakehouse.sh}
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN_CMD: python /opt/airflow/scripts/airflow-secret-command.py database-url
+    AIRFLOW__CORE__FERNET_KEY_CMD: cat /run/secrets/airflow_fernet_key
+    AIRFLOW__API__SECRET_KEY_CMD: cat /run/secrets/airflow_api_secret_key
+    AIRFLOW__API_AUTH__JWT_SECRET_CMD: cat /run/secrets/airflow_jwt_secret
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8080/execution/
+    AIRFLOW__DAG_PROCESSOR__DAG_BUNDLE_STORAGE_PATH: ${LAKEHOUSE_BUNDLE_CONTAINER_ROOT:-/opt/airflow/dag_bundles}
+    AIRFLOW__DAG_PROCESSOR__DAG_BUNDLE_CONFIG_LIST: ${LAKEHOUSE_BUNDLE_CONFIG_LIST:?Rendered by scripts/lakehouse.sh}
+    AIRFLOW_ADMIN_USERNAME: ${AIRFLOW_ADMIN_USERNAME:-admin}
+    LAKEHOUSE_BUNDLE_HOST_ROOT: ${LAKEHOUSE_BUNDLE_HOST_ROOT:?Set by scripts/lakehouse.sh}
+    LAKEHOUSE_BUNDLE_CONTAINER_ROOT: ${LAKEHOUSE_BUNDLE_CONTAINER_ROOT:-/opt/airflow/dag_bundles}
+    LAKEHOUSE_BROKER_URL: https://airflow-token-broker:8443
+    LAKEHOUSE_BROKER_CA_FILE: /run/certs/airflow-token-broker-ca.crt
+    LAKEHOUSE_BROKER_CA_HOST_PATH: ${LAKEHOUSE_BROKER_CA_HOST_PATH:?Set by scripts/lakehouse.sh}
+    LAKEHOUSE_BROKER_CA_CONTAINER_PATH: /run/certs/airflow-token-broker-ca.crt
+    LAKEHOUSE_CHECKPOINT_KEYS_HOST_DIR: ${LAKEHOUSE_CHECKPOINT_KEYS_HOST_DIR:?Set by scripts/lakehouse.sh}
+    LAKEHOUSE_SPARK_IMAGE: ${LAKEHOUSE_SPARK_IMAGE:-local/lakehouse-spark-runtime:3.5.9_1.10.2}
+    LAKEHOUSE_SPARK_DOCKER_NETWORK: lakehouse-local_airflow-spark
+    LAKEHOUSE_SPARK_DATA_NETWORK: lakehouse-local_data-access
+    AIRFLOW_BROKER_CONTROL_TOKEN_FILE: /run/secrets/airflow_broker_control_token
+  secrets: &airflow-common-secrets
+    - airflow_postgres_password
+    - airflow_fernet_key
+    - airflow_api_secret_key
+    - airflow_jwt_secret
+
+services:
+  airflow-postgres:
+    image: postgres:17.11-alpine3.24@sha256:1bcc18d81671b02906296aad470ec9778a6b71016ce953092024b680bad007b0
+    profiles: [airflow]
+    environment:
+      POSTGRES_DB: airflow
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD_FILE: /run/secrets/airflow_postgres_password
+    secrets: [airflow_postgres_password]
+    volumes:
+      - airflow-postgres-data:/var/lib/postgresql/data
+    networks: [airflow-internal]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U airflow -d airflow]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: on-failure:3
+
+  airflow-init:
+    <<: *airflow-common
+    profiles: [airflow]
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+    secrets:
+      - airflow_postgres_password
+      - airflow_fernet_key
+      - airflow_api_secret_key
+      - airflow_jwt_secret
+      - airflow_admin_password
+      - keycloak_airflow_client_secret
+      - airflow_broker_viewer_password
+    volumes:
+      - ./infra/airflow/ensure-git-connection.py:/opt/airflow/scripts/ensure-git-connection.py:ro
+      - ./infra/airflow/bootstrap-airflow-admin.py:/opt/airflow/scripts/bootstrap-airflow-admin.py:ro
+      - ./infra/airflow/ensure-broker-viewer.py:/opt/airflow/scripts/ensure-broker-viewer.py:ro
+    networks: [airflow-internal]
+    command: [bash, -ec, "airflow db migrate && python /opt/airflow/scripts/bootstrap-airflow-admin.py && python /opt/airflow/scripts/ensure-git-connection.py && python /opt/airflow/scripts/ensure-broker-viewer.py"]
+    restart: "no"
+
+  airflow-api-server:
+    <<: *airflow-common
+    profiles: [airflow]
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      keycloak:
+        condition: service_healthy
+    secrets:
+      - airflow_postgres_password
+      - airflow_fernet_key
+      - airflow_api_secret_key
+      - airflow_jwt_secret
+      - keycloak_airflow_client_secret
+    ports:
+      - 127.0.0.1:${AIRFLOW_HOST_PORT:-8085}:8080
+    environment:
+      <<: *airflow-environment
+      # Sign-in maps groups to Airflow roles from the product files (no restart for new products).
+      LAKEHOUSE_DATA_PRODUCTS_DIR: /opt/airflow/data-products
+    volumes:
+      - ${LAKEHOUSE_BUNDLE_HOST_ROOT:?Set by scripts/lakehouse.sh}:${LAKEHOUSE_BUNDLE_CONTAINER_ROOT:-/opt/airflow/dag_bundles}:ro
+      - ./infra/products/data_products.py:/opt/airflow/data_products.py:ro
+      - ./data-products:/opt/airflow/data-products:ro
+    networks: [airflow-internal, core]
+    command: [api-server]
+    healthcheck:
+      test: [CMD-SHELL, curl --connect-timeout 2 --max-time 4 -fsS http://127.0.0.1:8080/api/v2/version >/dev/null]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 120s
+    restart: unless-stopped
+
+  airflow-scheduler:
+    <<: *airflow-common
+    profiles: [airflow]
+    group_add: ["${DOCKER_GID:-0}"]
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      airflow-api-server:
+        condition: service_healthy
+      airflow-token-broker:
+        condition: service_healthy
+    secrets:
+      - airflow_postgres_password
+      - airflow_fernet_key
+      - airflow_api_secret_key
+      - airflow_jwt_secret
+      - airflow_broker_control_token
+    environment:
+      <<: *airflow-environment
+      PYTHONPATH: /opt/lakehouse/python
+      # The MV deploy (mv-promotion) reads each product's catalogs and MV databases from
+      # the product files and logs in to StarRocks over TLS as the product writer.
+      LAKEHOUSE_DATA_PRODUCTS_DIR: /opt/airflow/data-products
+      STARROCKS_ENABLED: ${STARROCKS_ENABLED:-true}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./infra/products/data_products.py:/opt/lakehouse/python/data_products.py:ro
+      - ./data-products:/opt/airflow/data-products:ro
+      - ./.runtime/container-mounts/starrocks-ca.crt:/run/certs/starrocks-ca.crt:ro
+      - ${LAKEHOUSE_BUNDLE_HOST_ROOT:?Set by scripts/lakehouse.sh}:${LAKEHOUSE_BUNDLE_CONTAINER_ROOT:-/opt/airflow/dag_bundles}
+      - ${LAKEHOUSE_BROKER_CA_HOST_PATH:?Set by scripts/lakehouse.sh}:/run/certs/airflow-token-broker-ca.crt:ro
+      # Staged checkpoint keys: the factory checks the run's key here and mounts only that file.
+      - ${LAKEHOUSE_CHECKPOINT_KEYS_HOST_DIR:?Set by scripts/lakehouse.sh}:/run/secrets/checkpoint-keys:ro
+      # The platform DAG factory: builds product DAGs from workflows/*.json and runs their tasks.
+      - ./infra/airflow/lakehouse_dags:/opt/lakehouse/python/lakehouse_dags:ro
+    networks: [airflow-internal, core]
+    command: [scheduler]
+    restart: unless-stopped
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    profiles: [airflow]
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    secrets: *airflow-common-secrets
+    environment:
+      <<: *airflow-environment
+      PYTHONPATH: /opt/lakehouse/python
+    volumes:
+      - ${LAKEHOUSE_BUNDLE_HOST_ROOT:?Set by scripts/lakehouse.sh}:${LAKEHOUSE_BUNDLE_CONTAINER_ROOT:-/opt/airflow/dag_bundles}
+      # The platform DAG factory, imported by each product bundle's dags/lakehouse.py stub.
+      - ./infra/airflow/lakehouse_dags:/opt/lakehouse/python/lakehouse_dags:ro
+    networks: [airflow-internal]
+    command: [dag-processor]
+    restart: unless-stopped
+
+  airflow-triggerer:
+    <<: *airflow-common
+    profiles: [airflow]
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    secrets: *airflow-common-secrets
+    networks: [airflow-internal]
+    command: [triggerer]
+    restart: unless-stopped
+
+  airflow-token-broker:
+    image: local/lakehouse-airflow-token-broker:1.0.0
+    profiles: [airflow]
+    build:
+      context: ./infra/airflow-token-broker
+      dockerfile: Dockerfile
+    user: "${AIRFLOW_UID:?Set by scripts/lakehouse.sh}:0"
+    environment:
+      AIRFLOW_BROKER_CONTROL_TOKEN_FILE: /run/secrets/airflow_broker_control_token
+      KEYCLOAK_WRITER_CLIENT_SECRET_FILE: /run/secrets/keycloak_writer_client_secret
+      # Per-product writers (writers.json + password files), staged for the broker only.
+      AIRFLOW_BROKER_WRITERS_DIR: /run/secrets/airflow-writers
+      # The broker checks a DAG's bundle through the Airflow API as a Viewer.
+      AIRFLOW_API_URL: http://airflow-api-server:8080
+      AIRFLOW_BROKER_VIEWER_USERNAME: lakehouse-broker
+      AIRFLOW_BROKER_VIEWER_PASSWORD_FILE: /run/secrets/airflow_broker_viewer_password
+      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_REALM: lakehouse
+      KEYCLOAK_ISSUER: http://keycloak.localhost:8080/realms/lakehouse
+      KEYCLOAK_WRITER_CLIENT_ID: lakehouse-writer
+      AIRFLOW_BROKER_MAX_ACTIVE_RUNS: ${AIRFLOW_BROKER_MAX_ACTIVE_RUNS:-10}
+      AIRFLOW_BROKER_MAX_RUN_SECONDS: ${AIRFLOW_BROKER_MAX_RUN_SECONDS:-86400}
+    secrets:
+      - airflow_broker_control_token
+      - keycloak_writer_client_secret
+      - airflow_broker_viewer_password
+    volumes:
+      - ./.runtime/container-mounts/airflow-writers:/run/secrets/airflow-writers:ro
+      - ./.runtime/credentials/airflow-token-broker-server.crt:/run/certs/airflow-token-broker-server.crt:ro
+      - ./.runtime/credentials/airflow-token-broker-server-key.pem:/run/certs/airflow-token-broker-server-key.pem:ro
+      - ./.runtime/container-mounts/airflow-token-broker-ca.crt:/run/certs/airflow-token-broker-ca.crt:ro
+    networks: [core, airflow-spark]
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, -c, "import ssl,urllib.request; urllib.request.urlopen('https://airflow-token-broker:8443/health/ready', context=ssl.create_default_context(cafile='/run/certs/airflow-token-broker-ca.crt'), timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  airflow-postgres-data:
+    name: lakehouse-local_airflow-postgres-data
+
+networks:
+  airflow-internal:
+    name: lakehouse-local_airflow-internal
+    driver: bridge
+  airflow-spark:
+    name: lakehouse-local_airflow-spark
+    driver: bridge
+
+secrets:
+  airflow_postgres_password:
+    file: ./.runtime/credentials/airflow-postgres-password
+  airflow_fernet_key:
+    file: ./.runtime/credentials/airflow-fernet-key
+  airflow_api_secret_key:
+    file: ./.runtime/credentials/airflow-api-secret-key
+  airflow_jwt_secret:
+    file: ./.runtime/credentials/airflow-jwt-secret
+  airflow_admin_password:
+    file: ./.runtime/credentials/airflow-admin-password
+  airflow_broker_control_token:
+    file: ./.runtime/credentials/airflow-broker-control-token
+  airflow_broker_viewer_password:
+    file: ./.runtime/credentials/airflow-broker-viewer-password
+  keycloak_writer_client_secret:
+    file: ./.runtime/credentials/keycloak-writer-client-secret
+  keycloak_airflow_client_secret:
+    file: ./.runtime/credentials/keycloak-airflow-client-secret

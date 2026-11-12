@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-IMAGE="${SPARK_BOOTSTRAP_IMAGE:-local/lakehouse-spark-runtime:3.5.5_1.10.2}"
+IMAGE="${SPARK_BOOTSTRAP_IMAGE:-local/lakehouse-spark-runtime:3.5.9_1.10.2}"
 SECRET="$ROOT/.runtime/container-mounts/keycloak-writer-client-secret"
 PASSWORD="$ROOT/.runtime/container-mounts/srv-default-writer-password"
 APP="$ROOT/infra/spark-bootstrap/create_smoke_tables.py"

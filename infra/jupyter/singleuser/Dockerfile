@@ -1,11 +1,10 @@
-FROM local/lakehouse-spark-runtime:3.5.5_1.10.2 AS spark-runtime
+FROM local/lakehouse-spark-runtime:3.5.9_1.10.2 AS spark-runtime
 # jupyterhub/singleuser:6.1.1-7 (rebuilt 2026-11-07), multi-arch index digest.
 FROM docker.io/jupyterhub/singleuser@sha256:4f4b2240f6645834fe68358ac4b0c2e1fc4d0c70549910d682281fee352c3fd6
 
 USER root
 COPY --from=spark-runtime /opt/spark /opt/spark
-COPY --from=spark-runtime /usr/lib/jvm /usr/lib/jvm
-COPY --from=spark-runtime /etc/java-17-openjdk /etc/java-17-openjdk
+COPY --from=spark-runtime /opt/java/openjdk /opt/java/openjdk
 # git for the users' own clones, and the JupyterLab Git extension (requirements.txt) uses it.
 # Plus security updates the base digest doesn't have yet (Trivy: apt, libapt-pkg7.0).
 RUN apt-get update \
@@ -48,8 +47,8 @@ COPY infra/jupyter/singleuser/lakehouse-install-requirements /usr/local/bin/lake
 RUN chmod 0755 /usr/local/bin/lakehouse-install-requirements
 
 ENV SPARK_HOME=/opt/spark \
-    JAVA_HOME=/usr/lib/jvm/java-17-openjdk-arm64 \
-    PATH=/opt/spark/bin:/opt/spark/sbin:/usr/lib/jvm/java-17-openjdk-arm64/bin:${PATH} \
+    JAVA_HOME=/opt/java/openjdk \
+    PATH=/opt/spark/bin:/opt/spark/sbin:/opt/java/openjdk/bin:${PATH} \
     PYSPARK_PYTHON=/opt/lakehouse/venv/bin/python \
     PYSPARK_DRIVER_PYTHON=/opt/lakehouse/venv/bin/python \
     PYTHONPATH=/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9.7-src.zip
