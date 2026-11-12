@@ -11,7 +11,7 @@
 ## Stage Progress
 - [x] Workspace Detection — clean tree.
 - [x] Requirements Analysis — the user approved item 1 with all proposed tests and recommendations ("lets proceed with 1, proceed with all you prpoposed tests and recommendations"); item 2 (scan built images) not in scope.
-- [ ] Code Generation
+- [x] Code Generation, Build and Test, Deploy — run 43213687800 success; graph 6058 -> 5489.
 
 ## Extension Configuration
 | Extension | Enabled | Decided At |
@@ -24,11 +24,13 @@
 <!-- intent-lifecycle:start -->
 ```json
 {
-  "current_stage": "CONSTRUCTION - Code Generation",
+  "archive": "aidlc-docs/archive/20261112-scan-stale-targets",
+  "current_stage": "DEPLOY - Deploy",
   "intent_id": "20261112-scan-stale-targets",
   "name": "Scan Stale Targets",
   "previous_intent": "aidlc-docs/archive/20261112-spark-base-image",
-  "status": "IN_PROGRESS"
+  "status": "CLOSED",
+  "summary": "aidlc-docs/archive/20261112-scan-stale-targets/intent-summary.md"
 }
 ```
 <!-- intent-lifecycle:end -->
