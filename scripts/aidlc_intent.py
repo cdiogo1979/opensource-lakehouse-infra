@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -18,6 +19,15 @@ AUDIT_FILE = "aidlc-docs/current/audit.md"
 MARKER_START = "<!-- intent-lifecycle:start -->"
 MARKER_END = "<!-- intent-lifecycle:end -->"
 PROTECTED = ("aidlc-docs/knowledge", "aidlc-docs/archive", STATE_FILE, AUDIT_FILE)
+ARCHIVE_ROOT = "aidlc-docs/archive"
+# Archived copies of dependency manifests would be read by GitHub's dependency graph and
+# raise Dependabot alerts for software the platform no longer runs; they keep their content
+# under this suffix.
+ARCHIVED_SUFFIX = ".archived"
+_MANIFEST_NAME = re.compile(
+    r"requirements[^/]*\.txt|pom\.xml|pyproject\.toml|Pipfile(\.lock)?|poetry\.lock|package(-lock)?\.json|yarn\.lock"
+    r"|go\.(mod|sum)|Cargo\.(toml|lock)|Gemfile(\.lock)?|composer\.(json|lock)"
+)
 
 
 class CompactionError(Exception):
@@ -260,6 +270,30 @@ def _tree_hash(path: Path) -> str:
     return digest.hexdigest()
 
 
+def is_dependency_manifest(path: Path) -> bool:
+    """Whether GitHub's dependency graph would read this file as a manifest."""
+    if _MANIFEST_NAME.fullmatch(path.name):
+        return True
+    return path.suffix in (".yml", ".yaml") and path.parent.name == "workflows" and path.parent.parent.name == ".github"
+
+
+def neutralize_manifests(directory: Path, dry_run: bool = False) -> list[Path]:
+    """Rename every dependency manifest under ``directory`` to ``<name>.archived``.
+
+    Args:
+        directory: An archive (or its ``full-artifacts``) folder.
+        dry_run: List the files without renaming them.
+
+    Returns:
+        The manifests found (original paths), sorted.
+    """
+    found = sorted(path for path in directory.rglob("*") if path.is_file() and is_dependency_manifest(path))
+    if not dry_run:
+        for path in found:
+            path.rename(path.with_name(path.name + ARCHIVED_SUFFIX))
+    return found
+
+
 def _archive_path(intent_id: str) -> str:
     """Return the stable archive directory for an intent.
 
@@ -297,6 +331,7 @@ def _prepare_archive(root: Path, manifest: dict[str, Any], archive: Path) -> Non
     for value in inputs:
         rel = _safe_relative(value)
         _copy_verified(_inside(root, rel), full / rel)
+    neutralize_manifests(full)
     (staging / "intent-summary.md").write_text(_summary_text(manifest, _archive_path(manifest["intent_id"])), encoding="utf-8")
     (staging / "compaction-manifest.sha256").write_text(manifest["_digest"] + "\n", encoding="utf-8")
     archive.parent.mkdir(parents=True, exist_ok=True)
@@ -466,7 +501,19 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--apply", action="store_true")
     command.add_argument("--root", type=Path, default=Path.cwd())
     command.add_argument("--manifest", type=Path)
+    neutralize = subparsers.add_parser("neutralize-archives", help=f"Rename dependency manifests in existing archives to <name>{ARCHIVED_SUFFIX}")
+    neutral_mode = neutralize.add_mutually_exclusive_group(required=True)
+    neutral_mode.add_argument("--dry-run", action="store_true")
+    neutral_mode.add_argument("--apply", action="store_true")
+    neutralize.add_argument("--root", type=Path, default=Path.cwd())
     args = parser.parse_args(argv)
+    if args.command == "neutralize-archives":
+        archive = args.root / ARCHIVE_ROOT
+        found = neutralize_manifests(archive, dry_run=args.dry_run) if archive.is_dir() else []
+        for path in found:
+            print(path.relative_to(args.root).as_posix())
+        print(f"{len(found)} archived manifest(s) {'would be renamed' if args.dry_run else 'renamed'} to <name>{ARCHIVED_SUFFIX}")
+        return 0
     manifest_path = args.manifest or args.root / "aidlc-docs/current/compaction" / args.intent_id / "manifest.json"
     try:
         result = compact(args.root, args.intent_id, load_manifest(manifest_path), dry_run=args.dry_run)

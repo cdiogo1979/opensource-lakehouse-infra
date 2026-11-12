@@ -11,7 +11,7 @@ It is an adaptation of AWS's AI-DLC workflows, version 1 ([awslabs/aidlc-workflo
 | The workflow | `.claude/skills/aidlc-workflows/` (also `.agents/skills/aidlc-workflows/`) | Stage rules, question format, content validation, and opt-in extensions |
 | The open intent | `aidlc-docs/current/` | Its stage documents, `aidlc-state.md` (stage, status, follow-ups) and `audit.md` (every input and decision, timestamped) |
 | Canonical knowledge | `aidlc-docs/knowledge/opensource-lakehouse-infra/` | What is true now: `application-design.md` and one functional design per component (`functional-design/*.md`) |
-| History | `aidlc-docs/archive/<intent-id>/` | Each closed intent: its full artifacts and audit, and an `intent-summary.md` |
+| History | `aidlc-docs/archive/<intent-id>/` | Each closed intent: its full artifacts and audit, and an `intent-summary.md`; archived dependency manifests are stored as `<name>.archived`, so Dependabot ignores them |
 | Closing tool | `scripts/aidlc_intent.py` | `compact <intent-id> --dry-run` and `--apply`: archive, update the canonical knowledge, clear the workflow files |
 
 ## How a change goes
