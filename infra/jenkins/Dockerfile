@@ -3,6 +3,10 @@ FROM python:3.10-slim-bookworm@sha256:5be5aaecb962a41567bc8041f1e9e3432cb085b037
 FROM jenkins/jenkins:lts-jdk21@sha256:a660310e39ade10631f774bacd5219de767dfd08947ea5c32a739b5e5bb382c1
 
 USER root
+# Take the base's distribution fixes as they are released (built-image-os-upgrades).
+RUN apt-get update \
+ && apt-get upgrade --yes --no-install-recommends \
+ && rm -rf /var/lib/apt/lists/*
 
 # Keep the Jenkins image as the runtime base and add only the pinned Python 3.10 runtime.
 COPY --from=python-runtime /usr/local/ /usr/local/

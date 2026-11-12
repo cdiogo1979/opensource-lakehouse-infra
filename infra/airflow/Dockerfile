@@ -1,6 +1,10 @@
 FROM apache/airflow:3.3.2-python3.10@sha256:db151dc175a22504ba8729ec38dd3964326935dfa6c4c2d6480ebd14d33b3b29
 
 USER root
+# Take the base's distribution fixes as they are released (built-image-os-upgrades).
+RUN apt-get update \
+ && apt-get upgrade --yes --no-install-recommends \
+ && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /requirements.txt
 
