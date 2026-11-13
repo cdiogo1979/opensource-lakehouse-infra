@@ -103,3 +103,29 @@ This is a single-machine development platform. What that means for security:
 - **Public repositories**: product repositories must be readable without credentials.
 
 All limitations: [Known limitations](reference/limitations.md).
+
+## Risk on a cloud provider
+
+An assessment of running the stack on a cloud provider with its published ports reachable from the internet. It is a judgment from how each service is exposed and from the vulnerability scan of 2026-11-13 ([Vulnerability alerts](reference/vulnerability-alerts.md)), not a penetration test.
+
+**Assumptions**:
+- Every connection uses HTTPS or TLS, with certificates from a trusted certificate provider (no self-signed certificates, no plain HTTP sign-ins).
+- Every user and service account has its own strong password; the published default password is not used.
+- The stack is otherwise as built here: one machine, the same ports published (Keycloak, Airflow, JupyterHub, Jenkins, Polaris, RustFS, StarRocks), the same images.
+
+**Overall risk: medium.** Strong passwords and TLS remove the easiest attacks (guessed passwords, credentials read on the network). What remains comes from about ten public services, admin interfaces included, single-factor logins, and the known vulnerabilities of the images that become internet-facing. The Spark and Jupyter jar findings stay low: those containers are not reachable from outside.
+
+| Vulnerability | Risk | Mitigation plan |
+|---|---|---|
+| Jenkins public: a frequent internet target with a history of exploited core and plugin flaws; plugins are outside the scan | High | Keep Jenkins private (VPN or IP allowlist); stay on the current LTS and update plugins as Jenkins warns |
+| Admin interfaces public: the Keycloak admin console, StarRocks FE HTTP (8030), the RustFS console, the Polaris API | Medium-high | Publish only the user-facing apps (Airflow, JupyterHub, Keycloak sign-in, StarRocks SQL); reach the admin interfaces through a VPN, an IP allowlist or a reverse proxy that blocks their paths |
+| Single-factor logins: passwords alone, open to phishing and password spraying | Medium-high | Require MFA in Keycloak (covers every web app) and enable its brute-force detection; restrict StarRocks SQL (9030), whose LDAP password logins have no lockout, to known networks or a VPN |
+| Known vulnerabilities in internet-facing external images: Keycloak (1 fixable critical), Polaris (1 critical, about 60 high), StarRocks FE and BE (about 180 fixable) | Medium-high | Upgrade to releases that fix them and update the digests; Code scanning lists only fixable findings, so each alert is an upgrade to plan; keep the weekly scan |
+| One compromised app controls the host: Airflow and JupyterHub use the Docker socket to start containers, so a stolen account or an app flaw reaches every container and secret | Medium | Rootless Docker or a socket proxy that allows only container start and stop; longer term, Kubernetes with per-workload service accounts ([Future work](future-work.md)) |
+| Logged-in users run code: Airflow DAGs and Jupyter notebooks run user code by design | Medium | Keep product roles narrow; MFA; review who holds developer and owner roles; isolate the Docker socket as above |
+| Reconcilers use the Keycloak `admin` account | Medium | A dedicated Keycloak client with only the realm roles the reconcilers need |
+| No detection: no alerts on failed logins, admin changes or unusual activity | Medium | Forward Keycloak events and service logs to a central log store with alerts on login failures and admin events ([Future work](future-work.md)) |
+| Data storage reachable: the RustFS S3 API is public | Medium | Keep the S3 API private (Spark, Polaris and StarRocks reach it inside the network); if it must be public, allow only the IP ranges that need it |
+| Spark-bundled jars (Netty, Jackson, Avro in `hadoop-client-runtime` and the Iceberg and AWS bundles) and OS packages without a fix | Low | Not reachable from outside; reduce with the jar cleanup and a newer Spark when Iceberg supports it; dismiss in Code scanning with the reason |
+
+With the admin interfaces private and MFA on (the first three rows), the risk drops to roughly low-medium. Checking the open critical and high CVEs against CISA's Known Exploited Vulnerabilities catalog shows which of the image findings attackers actually use, and sets the order of the upgrades.
