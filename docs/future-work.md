@@ -31,6 +31,32 @@ Today each service has its own logs and health checks, and `./scripts/lakehouse.
 
 Questions to settle first: the memory budget next to Spark and StarRocks, and keeping secrets out of collected logs and metrics.
 
+#### Proposal (2026-11-13)
+
+Grafana, Prometheus and Loki, with Grafana Alloy as the single collector, as an optional Compose module (`compose.observability.yml`, enabled like the Jupyter and Jenkins modules). An outline, not yet prototyped.
+
+- **Sources**: most components already expose Prometheus metrics or have a standard exporter, to be enabled rather than built: Keycloak and Polaris (Quarkus metrics), StarRocks FE and BE, JupyterHub, Jenkins (Prometheus plugin), Airflow (StatsD or OpenTelemetry metrics), Postgres (`postgres_exporter`), containers (cAdvisor), the host (`node_exporter`), and the Airflow token broker (already exposed).
+- **Collector**: Alloy scrapes the metrics and ships container logs; it also speaks OpenTelemetry, so traces can be added without another agent, and it can send everything to a managed service unchanged if the platform moves to a cloud provider.
+- **Sign-in and secrets**: Grafana signs in through Keycloak like the other apps, with `role-platform-admin` as Grafana admin; collected logs keep today's redaction rules.
+
+Phases:
+
+| Phase | What it gives |
+|---|---|
+| 1. Health and resources | Every service's health, CPU and memory per container, volume and RustFS disk use, Spark containers near their memory limit (the cause of exit 137 in [Known limitations](reference/limitations.md)) |
+| 2. Logs and security alerts | Searchable logs from every container and DAG run; alerts on Keycloak login failures and admin events and on failed reconciler cycles (the "no detection" row of [Security](security.md#risk-on-a-cloud-provider)) |
+| 3. Pipeline metrics | Airflow run durations and failures per product, broker token renewals, StarRocks query times and materialized-view refresh failures |
+| 4. Traces, if needed | OpenTelemetry across Airflow, Spark and Polaris; the most effort for the least day-to-day value here |
+
+Phases 1 and 2 together are a medium intent.
+
+Costs and caveats:
+- **Memory**: roughly 1 to 1.5 GB for the module with about 15 days of local retention, which is why it stays optional.
+- **Docker access for logs**: collecting container logs needs read access to Docker; use a read-only socket proxy or Docker's Loki logging driver rather than the socket itself.
+- **Licenses**: Grafana and Loki are AGPLv3, Prometheus is Apache 2.0; fine to run, worth knowing if the platform is redistributed.
+
+Alternatives considered: SigNoz or OpenObserve (one OpenTelemetry-native UI; OpenObserve is light, but there are far fewer ready dashboards for these components); OpenSearch or Elastic (strong log search, too heavy for one machine); Netdata (instant host and container dashboards, weak for platform-specific metrics and alerts).
+
 ### Running on Kubernetes
 
 Today the platform is one Docker Compose project on one machine, so every component shares its CPU and memory, and Spark runs in one container per Airflow run or Jupyter server. Moving to Kubernetes would let the components scale:
