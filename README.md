@@ -215,4 +215,4 @@ Proposals under consideration, each a future AI-DLC intent ([details](docs/futur
 - **Governance with OpenMetadata**: a searchable catalog of every product's tables, lineage from Airflow and Spark, ownership, a glossary and classifications, and data quality results, with Keycloak sign-in.
 - **Observability**: metrics (Prometheus), dashboards and alerts (Grafana), central logs (Loki or OpenSearch), and traces (OpenTelemetry) across the services and Spark runs.
 - **Running on Kubernetes**: autoscaling Spark executors per job, Airflow tasks and Jupyter servers as pods, replicas for the stateless services and StarRocks compute, and managed secrets and TLS.
-- **Platform improvements already identified**: a per-workflow parallelism limit, more Jupyter memory, workflow parameters at trigger time, materialized-view authoring and query rewrite, long-write credential refresh, and a least-privilege reconciler identity.
+- **Platform improvements already identified**: a per-workflow parallelism limit, more Jupyter memory, long-write credential refresh, a least-privilege reconciler identity, and restarting JupyterHub when the product model changes.

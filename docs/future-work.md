@@ -81,8 +81,6 @@ Recorded as follow-ups during earlier intents:
 |---|---|
 | A per-workflow parallelism limit and per-job Spark memory | A run's tasks share one Spark container; too many at once run it out of memory |
 | A higher Jupyter memory limit | Each Spark notebook holds 1 to 1.5 GiB of a server's 2 GiB |
-| Workflow parameters at trigger time | Change, for example, a reprocessing window without editing the workflow file |
-| Materialized-view authoring in the developer journey, and verifying query rewrite | Make acceleration a documented, tested practice |
 | Verify storage-credential refresh for long writes | A single Iceberg write over about 50 minutes is not verified |
 | A least-privilege identity for the reconcilers | They use the Keycloak administrator today |
 | Restart JupyterHub when the product model changes | The Hub keeps the model it started with |

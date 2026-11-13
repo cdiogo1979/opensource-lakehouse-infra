@@ -85,7 +85,7 @@ StarRocks materialized views (MVs) are part of query acceleration for **everyone
 
 - **Who authors them**: developers in dev, by hand; in UAT and production the platform deploys the views declared in the product repository, as the writer (below); owners and platform admins manage them. See the [developer journey](../journeys/data-product-developer.md#7-accelerate-queries-with-materialized-views).
 - **Who benefits**: every user whose query can be answered from a view they may read; see the [analyst journey](../journeys/data-analyst.md#4-faster-queries-through-materialized-views).
-- The rewrite behavior on this platform is to be verified by a follow-up intent.
+- **Verified on this platform** (UAT, 2026-11-11): once fresh, a deployed aggregate view answered a query on the base tables (seen with `TRACE LOGS MV`). Which queries qualify, and how to check: [Will StarRocks use a view](#promoting-materialized-views).
 
 ## Promoting materialized views
 
