@@ -27,11 +27,13 @@
 <!-- intent-lifecycle:start -->
 ```json
 {
+  "archive": "aidlc-docs/archive/20261113-airflow-python-packages",
   "current_stage": "DEPLOY",
   "intent_id": "20261113-airflow-python-packages",
   "name": "Airflow and Broker Python Packages",
   "previous_intent": "aidlc-docs/archive/20261112-built-image-os-upgrades",
-  "status": "IN_PROGRESS"
+  "status": "CLOSED",
+  "summary": "aidlc-docs/archive/20261113-airflow-python-packages/intent-summary.md"
 }
 ```
 <!-- intent-lifecycle:end -->

@@ -1,0 +1,16 @@
+# Only what the platform uses (airflow-python-packages); exact versions are selected by
+# Apache Airflow's immutable 3.3.2 / Python 3.10 constraints.
+# fab: auth manager and SSO login; standard: operators; git: DAG bundles;
+# docker: the Docker SDK that starts Spark containers; postgres: the metadata database.
+apache-airflow-providers-fab
+apache-airflow-providers-standard
+apache-airflow-providers-git
+apache-airflow-providers-docker
+apache-airflow-providers-postgres
+# OAuth login (FAB) and the materialized view deploy (StarRocks, MySQL protocol).
+authlib
+pymysql
+# Without these, Starlette (httpx2) and the DAG commands (graphviz) print warnings on stdout,
+# which break the CLI's JSON output (the full image had both through its providers).
+httpx2
+graphviz
