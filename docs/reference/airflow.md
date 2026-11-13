@@ -7,6 +7,10 @@ Reference: scheduled Spark workloads built from each product repository. Back to
 - **Start and stop**: start it with `./scripts/lakehouse.sh start-airflow`. Use `airflow-status` and `stop-airflow` to check and stop it.
 - **Sign-in**: the UI at <http://127.0.0.1:8085> uses Keycloak sign-in. Roles come from each product file's `apps.airflow`, read at every sign-in, and apply to the whole Airflow. The local FAB login is for recovery only and is limited to `AIRFLOW_ADMIN_USERNAME`.
 
+## The image
+
+`infra/airflow/Dockerfile` builds on the slim Airflow 3.3.2 image (Python 3.10) and installs only what the platform uses (`requirements.txt`): the `fab` (sign-in), `standard` (operators), `git` (bundles), `docker` (Spark containers) and `postgres` (metadata database) providers, `authlib`, `pymysql` (materialized views), and `httpx2` and `graphviz` (without them, warnings on stdout break the CLI's JSON output). Airflow's 3.3.2 constraints select the versions; `security-overrides.txt` then pins fixed releases newer than those constraints, and the build fails if `pip check` finds a conflict. On an Airflow upgrade, drop the overrides its constraints already cover. A DAG that needs another provider adds it to `requirements.txt`.
+
 ## DAG bundles
 
 Every product with a `repo` block gets two Git bundles, `<name>-main` (its `prod_branch`, production) and `<name>-uat` (its `uat_branch`). `default` has `default-main` and `default-uat` from `opensource-lakehouse-sample-dp`. The bundles are cloned into this repository's `.runtime/airflow-dag-bundles` and refresh every five minutes. `start-airflow` generates the list from `data-products/*.yaml` and checks it.

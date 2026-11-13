@@ -10,7 +10,9 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir --disable-pip-version-check -r /app/requirements.txt
+RUN pip install --no-cache-dir --disable-pip-version-check --upgrade pip==26.3 setuptools==84.1.0 \
+ && pip install --no-cache-dir --disable-pip-version-check -r /app/requirements.txt \
+ && pip check
 COPY app.py /app/app.py
 
 USER 65532:65532

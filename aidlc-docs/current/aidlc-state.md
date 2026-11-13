@@ -2,18 +2,18 @@
 
 ## Project Information
 - Project Type: Brownfield
-- Start Date: 2026-11-12T21:00:00Z
+- Start Date: 2026-11-13T07:00:00Z
 - Current Stage: DEPLOY - Intent closure
-- Intent: Upgrade OS packages at build in the Airflow, Jenkins, token broker, reconciler and LDAP images (item 2 of the cleanup plan).
-- Intent ID: 20261112-built-image-os-upgrades
-- Previous Intent: aidlc-docs/archive/20261112-scan-fixable-only (closed)
+- Intent: Airflow on the slim image with only the providers used and security overrides; token broker FastAPI/Starlette/cryptography upgrades.
+- Intent ID: 20261113-airflow-python-packages
+- Previous Intent: aidlc-docs/archive/20261112-built-image-os-upgrades (closed)
 
 ## Stage Progress
 - [x] Workspace Detection — clean tree.
 - [x] Requirements Analysis — recommended decisions accepted in advance by the user.
-- [x] Workflow Planning — minimal, inline: one unit (five Dockerfiles, guard test, docs); design stages skipped.
-- [x] Code Generation — apt-get/apk upgrade in five Dockerfiles; guard test; docs.
-- [x] Build and Test — 664 passed, 3 skipped; fixable OS findings 0; live checks passed.
+- [x] Workflow Planning — minimal, inline: one unit (Airflow and broker images, tests, docs); design stages skipped.
+- [x] Code Generation — slim base, providers, overrides, pip check, warning filters, broker pins; tests; docs.
+- [x] Build and Test — 667 passed, 3 skipped; image tests pass; fixable critical 0; live checks passed (SSO login by the user).
 - [x] Deploy — committed on main; push awaits approval.
 
 ## Extension Configuration
@@ -27,13 +27,11 @@
 <!-- intent-lifecycle:start -->
 ```json
 {
-  "archive": "aidlc-docs/archive/20261112-built-image-os-upgrades",
   "current_stage": "DEPLOY",
-  "intent_id": "20261112-built-image-os-upgrades",
-  "name": "Built Image OS Upgrades",
-  "previous_intent": "aidlc-docs/archive/20261112-scan-fixable-only",
-  "status": "CLOSED",
-  "summary": "aidlc-docs/archive/20261112-built-image-os-upgrades/intent-summary.md"
+  "intent_id": "20261113-airflow-python-packages",
+  "name": "Airflow and Broker Python Packages",
+  "previous_intent": "aidlc-docs/archive/20261112-built-image-os-upgrades",
+  "status": "IN_PROGRESS"
 }
 ```
 <!-- intent-lifecycle:end -->

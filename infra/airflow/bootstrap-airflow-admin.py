@@ -7,8 +7,11 @@ import json
 import logging
 import os
 import sys
+import warnings
 
 logging.disable(logging.CRITICAL)
+# A library warning printed on stdout would break the JSON user listing below.
+warnings.filterwarnings("ignore")
 
 from airflow.__main__ import main as airflow_main
 
