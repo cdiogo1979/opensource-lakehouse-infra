@@ -25,3 +25,13 @@ The complete audit history through intent `20261125-starrocks-audit-capture` is 
 **Email**: cdiogo@gmail.com
 
 ---
+
+## Post-closure incident — resolved
+**Timestamp**: 2026-11-26T09:55:00Z
+**User Input**: "all looks good"
+**AI Response**: "User confirmed joe-developer sees the audit uat tables again after the reconciler was recreated. Incident closed."
+**Context**: After closure of 20261125-starrocks-audit-capture.
+**User**: cdiogo1979
+**Email**: cdiogo@gmail.com
+
+---
