@@ -127,3 +127,23 @@ The complete audit history through intent `20261113-airflow-python-packages` is 
 **Email**: cdiogo@gmail.com
 
 ---
+
+## Build and Test — Live checks (part 1)
+**Timestamp**: 2026-11-26T08:10:00Z
+**User Input**: "approve and continue" / "Fix disconnection first (Recommended)" / "what are you wainting?"
+**AI Response**: "Rebuilt local/lakehouse-spark-runtime and local/lakehouse-jupyter-singleuser (build-time import checks of lakehouse_starrocks and pymysql passed); workload-python-parity OK (57 packages). Recreated starrocks-fe (fe.conf audit_log_modules, plugin volume, package mount); runtime bootstrap: plugin installed 5.0.0, table ok, user created; second run: plugin kept, user ok. Staging rows within a minute: query and connection rows, UTC timestamps, partition p20261126; srv-auditloader holds only INSERT on the staging table. The bootstrap's ALTER USER for the loader is captured with StarRocks' own masking (IDENTIFIED BY '***'); the loader password appears nowhere in the table. Full bootstrap: SELECT ON TABLE starrocks_audit_db__.starrocks_audit_tbl__ for role_audit_owner, role_audit_developer, role_audit_writer only; parsed as current on the next run (3 fewer re-grants); the bootstrap re-applies other grants every run, as main does (pre-existing). Found a run of audit-uat-starrocks_audit stuck since 2026-11-25T18:51 (bronze up_for_retry: No module named 'lakehouse_starrocks'; container still up); restarted Airflow with scripts/lakehouse.sh start-airflow (containers up, LAKEHOUSE_STARROCKS_CA_HOST_PATH set); its final DAG check loops because audit-main has no DAGs yet (expected until main is promoted), so it was stopped. Disconnection fix pushed in the audit repository; waiting for its merge into uat before clearing the stuck run and unpausing the DAG."
+**Context**: CONSTRUCTION - Build and Test, live checks in progress.
+**User**: cdiogo1979
+**Email**: cdiogo@gmail.com
+
+---
+
+## Build and Test — Live checks (part 2)
+**Timestamp**: 2026-11-26T08:20:00Z
+**User Input**: "looks good i see envents from the platform_admin user"
+**AI Response**: "The user merged PR #2 of the audit repository into uat and unpaused audit-uat-starrocks_audit. Verified: runs scheduled 07:20 and manual 08:05 succeeded (the 2026-11-25 run ended failed, its container is gone); bronze summary 704 rows from an empty watermark as srv-audit-writer through lakehouse_starrocks.connect(); silver 704 events, 0 unparsed; uat now 1432 bronze rows, 728 silver events = 728 distinct keys; all 25 writer events classified product_writer; root (the user's 'platform admin' events: bootstrap, reconciler, checks) platform_service; 0 unredacted IDENTIFIED BY in silver; five views in audit_lhuat active with last refresh SUCCESS. Wrote the build-and-test documents; only the Jupyter password login remains, which needs the user."
+**Context**: CONSTRUCTION - Build and Test.
+**User**: cdiogo1979
+**Email**: cdiogo@gmail.com
+
+---

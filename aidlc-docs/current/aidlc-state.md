@@ -3,7 +3,7 @@
 ## Project Information
 - Project Type: Brownfield
 - Start Date: 2026-11-25T18:56:54Z
-- Current Stage: CONSTRUCTION - Code Generation complete (awaiting approval)
+- Current Stage: CONSTRUCTION - Build and Test (Jupyter check pending, then approval)
 - Intent: Platform support for the audit data product's StarRocks source: capture StarRocks audit events into a staging table (AuditLoader), let the audit product read it (grants in the product model), and give workload code a StarRocks connection (`lakehouse_starrocks.connect()`) in Airflow runs and Jupyter.
 - Intent ID: 20261125-starrocks-audit-capture
 - Previous Intent: aidlc-docs/archive/20261113-airflow-python-packages (closed)
@@ -39,9 +39,9 @@
 
 ### CONSTRUCTION PHASE
 - [x] Functional Design (U1-U3 consolidated) — approved 2026-11-25
-- [ ] Code Generation U1, U2, U3, docs — done (729 host tests, 119 Airflow-image tests, docs links, compose config green); committed locally; awaiting approval
+- [x] Code Generation U1, U2, U3, docs — approved 2026-11-26
 - [x] NFR Requirements, NFR Design, Infrastructure Design — SKIPPED
-- [ ] Build and Test
+- [ ] Build and Test — live checks 1-9 PASS; check 10 (Jupyter password login) pending the user
 
 ### DEPLOY PHASE
 - [ ] Deploy handoff
@@ -58,7 +58,7 @@
 <!-- intent-lifecycle:start -->
 ```json
 {
-  "current_stage": "CONSTRUCTION - Code Generation",
+  "current_stage": "CONSTRUCTION - Build and Test",
   "intent_id": "20261125-starrocks-audit-capture",
   "name": "StarRocks Audit Capture",
   "previous_intent": "aidlc-docs/archive/20261113-airflow-python-packages",
