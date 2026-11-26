@@ -187,3 +187,13 @@ The complete audit history through intent `20261113-airflow-python-packages` is 
 **Email**: cdiogo@gmail.com
 
 ---
+
+## Build and Test — Approval; Deploy handoff prepared
+**Timestamp**: 2026-11-26T09:15:00Z
+**User Input**: "approve and continue"
+**AI Response**: "Classified as approve-continue. Build and Test approved (verification passed, no waiver). Created deploy/pr_request.md and deploy/deploy_instructions.md (7 ordered steps: merge and pull; disk check; lakehouse.sh start, which rebuilds the images and recreates the FE and Hub and installs the capture; apply audit.yaml for the grants; start-airflow; users restart Jupyter servers; hand over to the audit product), with rollback and inputs. Nothing pushed or deployed by this stage. Asked for approval of the handoff and whether to push the branch."
+**Context**: DEPLOY - Deploy; awaiting approval.
+**User**: cdiogo1979
+**Email**: cdiogo@gmail.com
+
+---
