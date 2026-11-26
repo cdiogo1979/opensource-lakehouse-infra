@@ -87,9 +87,14 @@ c.DockerSpawner.network_name = os.environ["JUPYTER_USER_NETWORK_NAME"]
 c.DockerSpawner.data_access_network_name = os.environ["DATA_ACCESS_NETWORK_NAME"]
 c.LakehouseDockerSpawner.broker_ca_host_path = os.environ["JUPYTERHUB_BROKER_CA_HOST_PATH"]
 c.LakehouseDockerSpawner.checkpoint_keys_host_dir = os.environ["JUPYTERHUB_CHECKPOINT_KEYS_HOST_DIR"]
+c.LakehouseDockerSpawner.starrocks_ca_host_path = os.environ.get("JUPYTERHUB_STARROCKS_CA_HOST_PATH", "")
 c.DockerSpawner.environment = {
     "LAKEHOUSE_TOKEN_BROKER_URL": "https://jupyterhub:8443/api/v1/token",
     "LAKEHOUSE_TOKEN_BROKER_CA": "/run/certs/jupyterhub-broker-ca.crt",
+    # lakehouse_starrocks.connect(): StarRocks over TLS as the signed-in user (AC-22).
+    "LAKEHOUSE_STARROCKS_HOST": "starrocks-fe",
+    "LAKEHOUSE_STARROCKS_PORT": "9030",
+    "LAKEHOUSE_STARROCKS_CA": "/run/certs/starrocks-ca.crt",
 }
 c.DockerSpawner.use_internal_ip = True
 c.DockerSpawner.remove = True

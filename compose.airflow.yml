@@ -27,6 +27,8 @@ x-airflow-common: &airflow-common
     LAKEHOUSE_BROKER_CA_FILE: /run/certs/airflow-token-broker-ca.crt
     LAKEHOUSE_BROKER_CA_HOST_PATH: ${LAKEHOUSE_BROKER_CA_HOST_PATH:?Set by scripts/lakehouse.sh}
     LAKEHOUSE_BROKER_CA_CONTAINER_PATH: /run/certs/airflow-token-broker-ca.crt
+    # The StarRocks CA's host path, mounted into each run container for lakehouse_starrocks.connect().
+    LAKEHOUSE_STARROCKS_CA_HOST_PATH: ${LAKEHOUSE_STARROCKS_CA_HOST_PATH:?Set by scripts/lakehouse.sh}
     LAKEHOUSE_CHECKPOINT_KEYS_HOST_DIR: ${LAKEHOUSE_CHECKPOINT_KEYS_HOST_DIR:?Set by scripts/lakehouse.sh}
     LAKEHOUSE_SPARK_IMAGE: ${LAKEHOUSE_SPARK_IMAGE:-local/lakehouse-spark-runtime:3.5.9_1.10.2}
     LAKEHOUSE_SPARK_DOCKER_NETWORK: lakehouse-local_airflow-spark

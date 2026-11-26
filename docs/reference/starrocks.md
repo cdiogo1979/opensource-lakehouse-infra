@@ -66,3 +66,18 @@ Every Keycloak user in a product group has a StarRocks user with exactly their g
 - **Leaving a group**: removing someone from all groups drops their StarRocks user.
 - **Safety**: if Keycloak cannot be read, nothing changes.
 - **Secret rotation**: to rotate the `srv-starrocks` secret, or to repair the catalogs, run `python3 infra/starrocks/bootstrap-starrocks.py --recreate-catalogs`. Data is untouched.
+
+## Audit capture
+
+StarRocks writes every audit event (queries, slow queries, logins and logouts) to the staging table `starrocks_audit_db__.starrocks_audit_tbl__`, through its AuditLoader plugin. The audit data product pulls it hourly into its Iceberg tables.
+
+- **What `start` sets up** (`infra/starrocks/audit_capture.py`, run by `bootstrap-starrocks.py --runtime-only`; safe to repeat):
+  - the staging table: the AuditLoader columns, one partition per day of `timestamp` (UTC), **7 days kept** (`partition_live_number`); an existing table is checked, never altered;
+  - the loader user `srv-auditloader`: a native StarRocks password generated once into `.runtime/credentials/srv-auditloader-password`, and only `INSERT` on the staging table;
+  - the plugin: the package vendored at `infra/starrocks/plugins/auditloader-5.0.0.zip` is checked against `auditloader.lock` (SHA-256), its `plugin.conf` gets the loader's user and password, and the result (`.runtime/starrocks-audit/auditloader.zip`, mounted read-only into the FE) is installed; it is reinstalled only when it changes. The FE keeps installed plugins in the volume `starrocks-fe-plugins`.
+- **Login events** need `audit_log_modules = slow_query,query,connection` in `infra/starrocks/conf/fe.conf` (set); `queryType` is then `query`, `slow_query`, `connection` or `disconnection`. A change of `fe.conf` takes effect at the next StarRocks restart.
+- **Who can read it**: only product roles whose product file declares `platform_sources.starrocks_audit: read` ([Data products](data-products.md#platform-sources)), today the audit product's owners, developers and writer. Everyone else, analysts of the audit product included, is refused. The table holds every statement of every user: treat it as sensitive.
+- **Status**: `./scripts/lakehouse.sh status` prints `audit capture: plugin INSTALLED; newest row <n> min ago`.
+- **If it fails**: the start continues and prints `ERROR: StarRocks audit capture not set up: ...`; a package that doesn't match its checksum is never installed. Fix the cause and run `python3 infra/starrocks/audit_capture.py` (or `start` again).
+- **From workload code**: `lakehouse_starrocks.connect()` ([Workload Python](workload-python.md#starrocks-connections)).
+- **Updating the plugin**: download the new package from `https://releases.starrocks.io/resources/auditloader.zip`, check `plugin.properties` (version, supported StarRocks versions), replace the vendored file, and update every field of `auditloader.lock` in the same reviewed commit; the next `start` reinstalls it.

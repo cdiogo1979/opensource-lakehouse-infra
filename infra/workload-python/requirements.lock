@@ -38,6 +38,7 @@ ptyprocess==0.7.0
 pure_eval==0.2.4
 pyarrow==17.0.0
 Pygments==2.21.0
+PyMySQL==1.1.2
 python-dateutil==3.0.0
 pytz==2026.6
 PyYAML==6.0.2

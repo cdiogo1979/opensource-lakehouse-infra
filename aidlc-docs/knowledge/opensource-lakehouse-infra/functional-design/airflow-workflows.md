@@ -77,6 +77,9 @@ Current functional design of the platform component that turns data product repo
   - `opensource-lakehouse-sample-dp` (from `f8c13e0`) uses subproject `sample`: `workflows/sample/`, notebooks in `notebooks/workload/sample/other/`, entry points `other/<file>.py`; its AGENTS.md describes the subproject and layer layout.
   - Notebooks have the sections Initialization (`# !lakehouse-install-requirements ~/work/opensource-lakehouse-sample-dp`, `# %run ../../../common/jupyter_environment_resolver.py` from a layer folder), Imports, their own sections, and Execution (only the `if __name__ == "__main__":` block, so importing a notebook runs nothing). The resolver uses `dev` unless `LAKEHOUSE_ENVIRONMENT` is `uat` or `prod`, and names the Spark application `<env>-<notebook>`.
 
+- **StarRocks for run code** (since 2026-11-26, [StarRocks Audit Capture intent archive](../../../archive/20261125-starrocks-audit-capture/intent-summary.md)): when StarRocks is enabled and `LAKEHOUSE_STARROCKS_CA_HOST_PATH` (set by `scripts/lakehouse.sh`) is absolute, `create_cluster` mounts the StarRocks CA read-only at `/run/certs/starrocks-ca.crt` and sets `LAKEHOUSE_STARROCKS_HOST`, `_PORT`, `_CA` and `_USER` (the product's `writer_user.username`), for `lakehouse_starrocks.connect()`; otherwise none of them is set and runs are unchanged.
+- **Paused DAGs keep run containers**: a run with a task waiting to retry keeps its Spark container (and broker registration until expiry) while its DAG is paused; it ends when the run finishes (seen 2026-11-26).
+
 ## Failure behavior
 - **Invalid workflow**: an import error naming every problem; the bundle has no DAGs until it's fixed.
 - **Non-product bundle**: an import error.

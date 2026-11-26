@@ -40,6 +40,8 @@ CONTAINER_BUNDLE_ROOT = Path("/opt/lakehouse-bundle")
 # mounted here, and the path where a run container receives its one key.
 CHECKPOINT_KEYS_DIR = Path("/run/secrets/checkpoint-keys")
 CHECKPOINT_KEY_TARGET = "/run/secrets/lakehouse-checkpoints"
+# StarRocks for workload code (lakehouse_starrocks.connect, AC-22): the CA path inside a run container.
+STARROCKS_CA_TARGET = "/run/certs/starrocks-ca.crt"
 # The shared workload Python environment in the Spark runtime image (infra/workload-python).
 WORKLOAD_PYTHON = "/opt/lakehouse/venv/bin/python"
 WORKLOAD_PYTHON_TOOL = "/opt/lakehouse/workload_python.py"
@@ -162,6 +164,7 @@ def _create_spark_container(
     aws_region: str,
     broker_ca_host_path: str,
     broker_ca_container_path: str,
+    starrocks_ca_host_path: str = "",
     **context: object,
 ) -> dict[str, str]:
     """Check the run's ``task_args``, then register the run with the broker and start its Spark container with the bundle mounted read-only."""
@@ -185,6 +188,9 @@ def _create_spark_container(
         broker_ca_host_path: {"bind": broker_ca_container_path, "mode": "ro"},
         **checkpoint_key,
     }
+    starrocks_environment = _starrocks_environment(product, starrocks_ca_host_path)
+    if starrocks_environment:
+        volumes[starrocks_ca_host_path] = {"bind": STARROCKS_CA_TARGET, "mode": "ro"}
     client = docker.DockerClient(base_url=docker_url)
     container = None
     try:
@@ -214,6 +220,7 @@ def _create_spark_container(
                 "LAKEHOUSE_ENVIRONMENT": environment,
                 "LAKEHOUSE_PRODUCT": product,
                 "PYTHONPATH": str(CONTAINER_BUNDLE_ROOT),
+                **starrocks_environment,
             },
             volumes=volumes,
         )
@@ -342,6 +349,25 @@ def _stop_spark_container(docker_url: str, **context: object) -> None:
             cleanup_errors.append("broker")
     if cleanup_errors:
         raise AirflowException("Airflow writer-run cleanup was incomplete; broker expiry remains the fallback.")
+
+
+def _product_writer(product: str) -> str:
+    """The product's writer username, from its product file (mounted in the scheduler)."""
+    import data_products  # mounted next to lakehouse_dags in the scheduler
+
+    return data_products.load_product(Path(os.environ.get("LAKEHOUSE_DATA_PRODUCTS_DIR", "/opt/airflow/data-products")) / f"{product}.yaml").writer_user.username
+
+
+def _starrocks_environment(product: str, ca_host_path: str) -> dict[str, str]:
+    """``LAKEHOUSE_STARROCKS_*`` for a run container (AC-22): empty when StarRocks is off or its CA isn't configured."""
+    if os.environ.get("STARROCKS_ENABLED", "true").lower() == "false" or not Path(ca_host_path).is_absolute():
+        return {}
+    return {
+        "LAKEHOUSE_STARROCKS_HOST": os.environ.get("LAKEHOUSE_STARROCKS_HOST", "starrocks-fe"),
+        "LAKEHOUSE_STARROCKS_PORT": os.environ.get("LAKEHOUSE_STARROCKS_PORT", "9030"),
+        "LAKEHOUSE_STARROCKS_CA": STARROCKS_CA_TARGET,
+        "LAKEHOUSE_STARROCKS_USER": _product_writer(product),
+    }
 
 
 def _mv_placement(product: str, environment: str) -> tuple[mv_deploy.Placement, str]:
@@ -483,6 +509,7 @@ def build_dag(workflow: Workflow, bundle_root: Path, identity: Identity, views: 
             "aws_region": os.environ.get("AWS_REGION", "us-east-1"),
             "broker_ca_host_path": broker_ca_host_path,
             "broker_ca_container_path": os.environ.get("LAKEHOUSE_BROKER_CA_CONTAINER_PATH", "/run/certs/airflow-token-broker-ca.crt"),
+            "starrocks_ca_host_path": os.environ.get("LAKEHOUSE_STARROCKS_CA_HOST_PATH", ""),
         },
         dag=dag,
     )

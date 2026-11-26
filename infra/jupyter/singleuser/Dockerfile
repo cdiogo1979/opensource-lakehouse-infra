@@ -42,7 +42,7 @@ COPY infra/jupyter/singleuser/kernel.json /opt/conda/share/jupyter/kernels/pytho
 COPY infra/jupyter/singleuser/lakehouse-kernels.json /etc/jupyter/jupyter_server_config.d/lakehouse-kernels.json
 COPY infra/jupyter/singleuser/lakehouse-user-extras.pth /opt/lakehouse/venv/lib/python3.10/site-packages/lakehouse-user-extras.pth
 COPY infra/workload-python/lakehouse-platform.pth /opt/lakehouse/venv/lib/python3.10/site-packages/lakehouse-platform.pth
-RUN env -u PYTHONPATH /opt/lakehouse/venv/bin/python -c "import lakehouse_spark, lakehouse_broker_client, ipywidgets"
+RUN env -u PYTHONPATH /opt/lakehouse/venv/bin/python -c "import lakehouse_spark, lakehouse_broker_client, lakehouse_starrocks, pymysql, ipywidgets"
 COPY infra/jupyter/singleuser/lakehouse-install-requirements /usr/local/bin/lakehouse-install-requirements
 RUN chmod 0755 /usr/local/bin/lakehouse-install-requirements
 

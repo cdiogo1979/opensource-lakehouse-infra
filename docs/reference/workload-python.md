@@ -22,6 +22,14 @@ An optional `requirements.txt` at the product repository's root.
 - **Airflow**: `install_requirements` installs it into the run's own container before `validate_environment`, retrying twice 30 seconds apart; a failure stops the run before any workload code, and the container is cleaned up as usual. Without a `requirements.txt` the task does nothing and needs no network.
 - **Jupyter**: `lakehouse-install-requirements` (see [JupyterHub](jupyterhub.md)).
 
+## StarRocks connections
+
+`lakehouse_starrocks.connect()` (same folder as `lakehouse_spark`) returns a PyMySQL connection to StarRocks over TLS, verified with the StarRocks CA. PyMySQL is part of the platform's set.
+- **In an Airflow run**: as the product's writer (`srv-<product>-writer`), with the run's Keycloak token, renewed through the run's token broker when it is within two minutes of expiry.
+- **In Jupyter**: as you, with your StarRocks (LDAP) password, asked every time a connection is opened; it is never stored.
+- **Settings**: the platform sets `LAKEHOUSE_STARROCKS_HOST`, `_PORT` and `_CA` (and the writer in Airflow runs); product repositories never configure StarRocks addresses or credentials. Outside an Airflow run or a JupyterHub server it raises an error.
+- **What it can read** is what the identity's StarRocks roles grant, for example the audit log staging table for the audit product ([StarRocks — audit capture](starrocks.md#audit-capture)).
+
 ## Spark sessions
 
 `lakehouse_spark.create_spark_session(app_name, catalog)` (`infra/workload-python/python/`, at `/opt/lakehouse/python` in both images, on the venv's path through `lakehouse-platform.pth`) is the platform's only copy of the Polaris catalogs (`lakehouse`, `lakehouse_uat`, `lakehouse_dev`, with `ResolvingFileIO`), the token source, redaction, and the checkpoint settings (see [Streaming checkpoints](streaming-checkpoints.md)).

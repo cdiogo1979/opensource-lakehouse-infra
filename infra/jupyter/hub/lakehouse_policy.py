@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+import re
 import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -60,6 +61,31 @@ def checkpoint_buckets(groups: object, products=None) -> tuple[str, ...]:
         for product in products
         if any(product.group(role) in member for role in CHECKPOINT_ROLES)
     ))
+
+
+STARROCKS_USERNAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
+
+
+def starrocks_username(oauth_user) -> str | None:
+    """The user's StarRocks user name: the Keycloak ``preferred_username`` (AC-18).
+
+    JupyterHub names users by their Keycloak ID (``sub``); StarRocks users are named
+    after the Keycloak username, as the reconciler creates them. Malformed values give none.
+    """
+    name = oauth_user.get("preferred_username") if isinstance(oauth_user, dict) else None
+    return name if isinstance(name, str) and STARROCKS_USERNAME.fullmatch(name) else None
+
+
+def starrocks_ca_volume(host_path: str, hub_copy: Path) -> dict:
+    """The read-only StarRocks CA mount for a user server (AC-22), or none.
+
+    The CA is optional (StarRocks may be off); without it lakehouse_starrocks.connect() says
+    the CA is missing. ``hub_copy`` is the Hub's own read-only mount of the same file.
+    """
+    host = Path(host_path) if host_path else None
+    if host is None or not host.is_absolute() or host.name != hub_copy.name or hub_copy.is_symlink() or not hub_copy.is_file():
+        return {}
+    return {str(host): {"bind": str(hub_copy), "mode": "ro"}}
 
 
 def checkpoint_key_volumes(buckets, host_dir: str, staged_dir: Path) -> dict[str, dict[str, str]]:

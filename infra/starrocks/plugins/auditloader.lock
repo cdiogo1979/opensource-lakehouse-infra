@@ -1,0 +1,11 @@
+# The vendored StarRocks AuditLoader plugin package (intent 20261125-starrocks-audit-capture).
+# StarRocks publishes it only at an unversioned URL with no checksum, so the package is kept
+# here unchanged and verified against sha256 before every install. To update: download the
+# new package, inspect plugin.properties (version, supported StarRocks versions), replace the
+# file, and change every field below in the same reviewed commit.
+version: 5.0.0
+file: auditloader-5.0.0.zip
+source_url: https://releases.starrocks.io/resources/auditloader.zip
+sha256: cd2a8aceb7943675192e80d7a6d02d675170ab3beba2d0d2f49b5bc8955a8ea2
+license: Apache-2.0
+retrieved: 2026-11-25

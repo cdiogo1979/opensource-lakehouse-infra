@@ -121,3 +121,37 @@ def test_sql_client_metadata_grant_renders_parses_and_is_revoked_with_access():
     # A catalog dropped to "none" revokes the grant with USAGE.
     plan = bootstrap.plan_grants({grant}, set(), ("role_default_developer",))
     assert plan.revoke == [grant] and plan.add == []
+
+
+# --- StarRocks audit log staging table (platform_sources, AC-15) -------------------------
+
+AUDIT = dp.load_product(ROOT / "data-products/audit.yaml")
+AUDIT_MODEL = sr.build_model([DEFAULT, SALES, AUDIT])
+STAGING = "TABLE starrocks_audit_db__.starrocks_audit_tbl__"
+
+
+def test_only_declared_reading_roles_select_the_audit_staging_table():
+    assert AUDIT_MODEL.audit_readers == ("role_audit_owner", "role_audit_developer", "role_audit_writer")
+    readers = {g.role for g in bootstrap.role_grants(AUDIT_MODEL) if g.object == STAGING}
+    assert readers == {"role_audit_owner", "role_audit_developer", "role_audit_writer"}
+    staging = [g for g in bootstrap.role_grants(AUDIT_MODEL) if "starrocks_audit" in g.object]
+    assert all(g.privilege == "SELECT" and g.catalog == sr.INTERNAL_CATALOG for g in staging)
+    assert not any("starrocks_audit" in g.object for g in bootstrap.role_grants(MODEL))
+
+
+def test_audit_table_grant_renders_and_parses_round_trip():
+    grant = bootstrap.Grant("role_audit_writer", "SELECT", sr.INTERNAL_CATALOG, STAGING)
+    assert bootstrap.render_grant(grant) == (
+        "SET CATALOG `default_catalog`;\nGRANT SELECT ON TABLE `starrocks_audit_db__`.`starrocks_audit_tbl__` TO ROLE `role_audit_writer`;"
+    )
+    rows = [{"Catalog": "default_catalog", "Grants": "GRANT SELECT ON TABLE starrocks_audit_db__.starrocks_audit_tbl__ TO ROLE 'role_audit_writer'"}]
+    parsed, unknown = bootstrap.parse_role_grants("role_audit_writer", rows)
+    assert unknown == [] and parsed == {grant}
+
+
+def test_audit_table_grant_is_kept_while_declared_and_revoked_when_removed():
+    current = bootstrap.role_grants(AUDIT_MODEL)
+    assert bootstrap.plan_grants(current, bootstrap.role_grants(AUDIT_MODEL), AUDIT_MODEL.managed_roles).add == []
+    without = sr.build_model([DEFAULT, SALES, dp.parse_product({**yaml.safe_load((ROOT / "data-products/audit.yaml").read_text()), "platform_sources": {}}, "audit.yaml")])
+    plan = bootstrap.plan_grants(current, bootstrap.role_grants(without), without.managed_roles)
+    assert sorted(g.role for g in plan.revoke if g.object == STAGING) == ["role_audit_developer", "role_audit_owner", "role_audit_writer"]

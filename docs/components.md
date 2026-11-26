@@ -11,7 +11,7 @@ For everyone: how the platform's parts fit together and which Compose modules ru
 | Storage | **RustFS** | S3-compatible buckets, three per product; no workload gets root keys; see [RustFS](reference/rustfs.md) |
 | Interactive compute | **JupyterHub** with Spark | Notebooks that read and write as the signed-in user; see [JupyterHub](reference/jupyterhub.md) |
 | Scheduled compute | **Airflow** with Spark | DAGs the platform builds from each product repository's workflow files; each run writes as the product's writer; see [Airflow](reference/airflow.md) |
-| SQL and BI | **StarRocks** | SQL over the same Iceberg tables, with each user's own permissions, and materialized views that accelerate queries; see [StarRocks](reference/starrocks.md) |
+| SQL and BI | **StarRocks** | SQL over the same Iceberg tables, with each user's own permissions, and materialized views that accelerate queries; its audit log is captured into a staging table for the audit data product; see [StarRocks](reference/starrocks.md) |
 | CI | **Jenkins** | One folder per product, building its repository's prod and UAT branches and its pull requests; see [Jenkins](reference/jenkins.md) |
 | Change workflow | **AI-DLC** | Every change to the platform is an intent: planned, approved stage by stage, recorded, and closed into the canonical design; see [AI-DLC](reference/aidlc.md) |
 | Workload code | the **workload Python environment** and `lakehouse_spark` | The same Python 3.10 packages in Airflow and Jupyter, and the platform's Spark session; see [Workload Python environment](reference/workload-python.md) |

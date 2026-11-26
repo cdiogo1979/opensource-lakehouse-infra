@@ -27,6 +27,10 @@ services:
       # Password logins are checked against LDAP over LDAPS, verified with this CA.
       - ./.runtime/container-mounts/ldap-ca.crt:/run/certs/ldap-ca.crt:ro
       - starrocks-fe-meta:/opt/starrocks/fe/meta
+      # Audit capture: the installed AuditLoader plugin (must survive a recreated FE, which keeps
+      # its metadata) and the built plugin package, which must stay at its install path.
+      - starrocks-fe-plugins:/opt/starrocks/fe/plugins
+      - ./.runtime/starrocks-audit:/opt/lakehouse/starrocks-audit:ro
     networks: [core, data-access, starrocks]
     mem_limit: ${STARROCKS_FE_MEMORY_LIMIT:-2g}
     healthcheck:
@@ -59,4 +63,5 @@ networks:
 
 volumes:
   starrocks-fe-meta:
+  starrocks-fe-plugins:
   starrocks-be-storage:
