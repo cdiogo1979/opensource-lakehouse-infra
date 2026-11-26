@@ -3,7 +3,7 @@
 ## Project Information
 - Project Type: Brownfield
 - Start Date: 2026-11-25T18:56:54Z
-- Current Stage: DEPLOY - Deploy handoff (awaiting approval)
+- Current Stage: Intent closure (compaction)
 - Intent: Platform support for the audit data product's StarRocks source: capture StarRocks audit events into a staging table (AuditLoader), let the audit product read it (grants in the product model), and give workload code a StarRocks connection (`lakehouse_starrocks.connect()`) in Airflow runs and Jupyter.
 - Intent ID: 20261125-starrocks-audit-capture
 - Previous Intent: aidlc-docs/archive/20261113-airflow-python-packages (closed)
@@ -44,7 +44,7 @@
 - [x] Build and Test — approved 2026-11-26; all live checks PASS (10 of 10)
 
 ### DEPLOY PHASE
-- [ ] Deploy handoff — `deploy/pr_request.md`, `deploy/deploy_instructions.md` awaiting approval
+- [x] Deploy handoff — approved 2026-11-26; branch pushed (`starrocks-audit-capture`)
 
 ## Extension Configuration
 | Extension | Enabled | Decided At |
@@ -58,11 +58,13 @@
 <!-- intent-lifecycle:start -->
 ```json
 {
+  "archive": "aidlc-docs/archive/20261125-starrocks-audit-capture",
   "current_stage": "DEPLOY - Deploy",
   "intent_id": "20261125-starrocks-audit-capture",
   "name": "StarRocks Audit Capture",
   "previous_intent": "aidlc-docs/archive/20261113-airflow-python-packages",
-  "status": "ACTIVE"
+  "status": "CLOSED",
+  "summary": "aidlc-docs/archive/20261125-starrocks-audit-capture/intent-summary.md"
 }
 ```
 <!-- intent-lifecycle:end -->

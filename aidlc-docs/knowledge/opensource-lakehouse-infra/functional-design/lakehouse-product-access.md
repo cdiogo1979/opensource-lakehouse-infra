@@ -54,6 +54,10 @@ The template gives every new product the same matrix. Developers author MVs in d
 - **Catalogs and namespaces** (`infra/polaris/bootstrap-catalogs.py`): the shared catalogs keep the default product's base location and allow each product's `s3://<bucket>/<catalog>/`. Product namespaces carry the location `s3://<bucket>/<catalog>/<namespace>/`; an existing namespace elsewhere is a conflict.
 - **OIDC filter**: Polaris accepts any `role-<token>-<role>` token role as a principal role; a role without grants grants nothing.
 
+## Platform sources (`platform_sources`, since 2026-11-26)
+
+Optional product-file block granting a product's roles read access to platform-wide data ([StarRocks Audit Capture intent archive](../../../archive/20261125-starrocks-audit-capture/intent-summary.md)). The only source is `starrocks_audit`, the StarRocks audit log staging table (every statement of every user, 7 days), meant for the audit data product. Every role must be listed with `none` or `read`; unknown sources, roles or levels fail validation; absent means `none`. `Product.platform_sources` holds it; `platform_source_level(source, role)` reads it. StarRocks grants `SELECT` on the table for `read` (see `starrocks-sql-access.md`). `data-products/audit.yaml` declares owner, developer and writer `read`, analyst `none` (the audit product's analysts read only its masked prod views; its `access.analyst` is `none` in every environment).
+
 ## Platform admin
 `role-platform-admin` is owner of every product. It has no Polaris role of its own.
 - Its Keycloak group carries every product's owner client role, and the reconciler gives its members every product's owner principal role.

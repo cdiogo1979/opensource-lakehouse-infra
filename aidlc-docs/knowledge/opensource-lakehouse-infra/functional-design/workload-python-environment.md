@@ -33,6 +33,14 @@ One pinned Python 3.10 environment, identical in `local/lakehouse-spark-runtime`
 - **Existing session**: returned when its default catalog matches; otherwise a `RuntimeError` asks for a kernel restart.
 - **Product repositories** (`opensource-lakehouse-sample-dp` from `ad1ca8d`): `notebooks/common/job_runtime.start_spark_job(app_name)` loads `configs/<env>.yml` and calls `create_spark_session("<env>-<app_name>", config["catalog_name"])`; see `airflow-workflows.md` for the rest of the repository contract.
 
+## StarRocks connections (`lakehouse_starrocks`, since 2026-11-26)
+
+[StarRocks Audit Capture intent archive](../../../archive/20261125-starrocks-audit-capture/intent-summary.md)
+- `connect(*, password_prompt=getpass.getpass, environ=None)` returns a PyMySQL connection (`autocommit`, connect timeout 15 s, read timeout 600 s, `utf8mb4`) over TLS verified with `LAKEHOUSE_STARROCKS_CA`.
+- **Mode**: `LAKEHOUSE_TOKEN_PROVIDER=airflow` → the product writer (`LAKEHOUSE_STARROCKS_USER`) with token login (`authentication_openid_connect_client`): the initial run token while its JWT `exp` is more than 120 s away, otherwise `POST {LAKEHOUSE_TOKEN_BROKER_URL}/v1/runs/token` (run handle, capability, broker CA; kept in the process). `JUPYTERHUB_USER` set → `LAKEHOUSE_STARROCKS_USER` (the Keycloak username, set by the spawner; never `JUPYTERHUB_USER`, which is the Keycloak ID) with a `getpass` password asked on every call, never stored. Anything else raises.
+- **Settings and errors**: host (default `starrocks-fe`), port (default 9030) and CA from the platform's variables; invalid or missing values raise `StarRocksConnectionError` naming the variable; no token, capability or password is ever printed, logged or put in a message.
+- **Packages**: `PyMySQL==1.1.2` in `requirements.in` and the lock (added as one line; pure Python, no dependencies); both image builds import `lakehouse_starrocks` and `pymysql`.
+
 ## Streaming checkpoints
 Structured Streaming checkpoints live in the product's own environment bucket, under `checkpoints/`, addressed as `s3ckpt://<bucket>/checkpoints/...`.
 - **Why a dedicated scheme**: Iceberg 1.10.2's streaming source reads and writes `<checkpoint>/sources/0/offsets/0` through the *source table's* FileIO, whose Polaris-vended credentials cover only the table location. With `ResolvingFileIO`, `s3ckpt://` goes to `HadoopFileIO` and from there to S3A with the checkpoint key, while table data keeps `S3FileIO` and vended credentials. `s3://` and `s3a://` are deliberately not mapped to S3A.

@@ -84,6 +84,16 @@ Catalog properties:
 - **Browsing in SQL clients**: leave the connection's default database empty (the session starts in `default_catalog`, whose `default_lh`, `default_lhuat` and `default_lhdev` are the materialized-view databases, not the Iceberg namespaces; DBeaver may draw them under whichever node is open). Iceberg tables are browsed in the catalogs or named `catalog.database.table`. Users reconnect after a grant change, because roles are read at login.
 - **Secret handling**: the password is read without echo or from a file, and reaches the client container only through `MYSQL_PWD` (copied by `docker run -e`). Nothing secret is printed or put in arguments. Host-side SQL passes the root password through `MYSQL_PWD`, copied by `docker exec -e`, never as an argument.
 
+## Audit capture (`infra/starrocks/audit_capture.py`)
+
+Current since 2026-11-26 ([StarRocks Audit Capture intent archive](../../../archive/20261125-starrocks-audit-capture/intent-summary.md)).
+- **Staging table** `starrocks_audit_db__.starrocks_audit_tbl__`: `DUPLICATE KEY (queryId, timestamp, queryType)`, `PARTITION BY date_trunc('day', timestamp)`, `partition_live_number` 7, replication 1; columns of the 4.1 AuditLoader DDL plus `ScanStats JSON NULL`. Created if missing; an existing table is compared by column name and normalized type (extras allowed, missing or retyped columns reported), never altered.
+- **Loader** `srv-auditloader`: native password (32 URL-safe characters, `.runtime/credentials/srv-auditloader-password`, 0600, generated once); every run sets it (`CREATE` or `ALTER USER ... IDENTIFIED BY`) and grants `INSERT ON TABLE` the staging table only; a same-named LDAP or JWT user is a reported conflict. The user reconciler manages only LDAP and JWT users, so it leaves the loader alone. Rotation: delete the file and rerun.
+- **Plugin**: the vendored package must match `auditloader.lock`'s SHA-256; `plugin.conf` keeps every shipped key and sets `frontend_host_port=127.0.0.1:8030` (the FE's own HTTP port inside its container), `database`, `table`, `user`, `password`, `secret_key=` (AuditLoader's encryption is unused: its key would sit next to the password); the built package (deterministic zip) goes to `.runtime/starrocks-audit/` (0700, file 0600), mounted read-only at `/opt/lakehouse/starrocks-audit/`. Install decision: missing → install; not `INSTALLED` or a different digest from `installed.sha256` → uninstall and install; else keep. A failed install records no digest.
+- **Grants for readers**: `platform_sources.starrocks_audit: read` gives the product role `SELECT ON TABLE starrocks_audit_db__.starrocks_audit_tbl__` in `default_catalog` (grant object `TABLE <db>.<table>`, rendered with quoted parts, parsed from `SHOW GRANTS`); undeclared, it is revoked.
+- **Order and failure**: after the root password, BE and LDAP login, before the role grants; a failure prints `ERROR: StarRocks audit capture not set up: ...` and the bootstrap continues; nothing is installed from an unverified package. `audit_capture.py --status` (used by `lakehouse.sh status`) prints the plugin state and the newest row's age.
+- **Masking**: StarRocks itself masks `IDENTIFIED BY` values in its audit log (`'***'`), so the loader's password never reaches the table (verified 2026-11-26).
+
 ## Opt-out and failure behavior
 - **`STARROCKS_ENABLED=false`** (environment or `.env`; case-insensitive): start, status, and stop leave out the StarRocks file. Both scripts print a notice and exit 0. The scheduled cycle skips StarRocks.
 - **Enabled but unreachable**: the product bootstrap and on-demand reconcile fail with exit 1. The scheduled cycle logs the failure and retries.
@@ -113,3 +123,4 @@ The tests are in `tests/starrocks/`.
 - Owner and platform-admin cannot drop Iceberg tables through StarRocks (accepted).
 - Reporting tools such as Power BI can now connect with a username and password over TLS (ODBC or JDBC). The user confirmed DBeaver and BI-tool logins on 2026-11-09.
 - Probe data files from Build and Test (`sr_bt_*`) were left in the buckets because Polaris refuses purge; they were deleted directly from RustFS on 2026-11-09.
+- **Pre-existing (seen 2026-11-26)**: the bootstrap re-applies many existing grants on every run (also before audit capture); the table grants are recognised as current.

@@ -1,0 +1,67 @@
+# Data product configuration. Created by `create-data-product.sh --init audit`
+# and applied by `create-data-product.sh data-products/audit.yaml`.
+# Names (namespaces, buckets, MV databases, groups, writer user) are locked once
+# applied; access levels and app mappings may be changed and reapplied.
+apiVersion: lakehouse.local/v1
+name: "audit"            # quoted: YAML reads bare no, on, off, yes, true, false, null as booleans or null
+description: The audit data product
+# Every environment uses its shared Polaris catalog; the product owns the
+# namespace, the bucket, and the StarRocks materialized-view database.
+environments:
+  prod: {catalog: lakehouse, namespace: audit_lh, bucket: bucket-audit, mv_database: audit_lh}
+  uat: {catalog: lakehouse_uat, namespace: audit_lhuat, bucket: bucket-audit-uat, mv_database: audit_lhuat}
+  dev: {catalog: lakehouse_dev, namespace: audit_lhdev, bucket: bucket-audit-dev, mv_database: audit_lhdev}
+# Keycloak groups; names must match role-<token>-<role>.
+groups:
+  owner: role-audit-owner
+  developer: role-audit-developer
+  analyst: role-audit-analyst
+  writer: role-audit-writer
+# Data access per role and environment (none, read, write, manage), applied to
+# the Polaris namespaces, the StarRocks databases, and the RustFS buckets.
+access:
+  owner: {prod: manage, uat: manage, dev: manage}
+  developer: {prod: read, uat: read, dev: write}
+  # Analysts get no namespace access, not even in prod: the audit tables hold every
+  # StarRocks statement in full (sql_text, payload), which can carry literal values
+  # such as personal data, and Polaris grants per namespace, not per table or column.
+  # Analysts read the audit data only through the prod MV database below, whose
+  # views expose masked SQL (literals as ?) and aggregates, never sql_text or payload.
+  # Requirement FR-6.2 of the audit product's intent 20261125-starrocks-query-audit.
+  analyst: {prod: none, uat: none, dev: none}
+  writer: {prod: write, uat: write, dev: write}
+# StarRocks materialized-view databases (none, read, author, manage).
+# Analysts read the prod views (masked, see access.analyst above).
+materialized_views:
+  owner: {prod: manage, uat: manage, dev: manage}
+  developer: {prod: read, uat: read, dev: author}
+  analyst: {prod: read, uat: none, dev: none}
+  writer: {prod: author, uat: author, dev: author}
+# Application access. Airflow has no per-product permissions, so its roles apply
+# platform-wide. Jenkins rights apply to the product's folder: the owner is always
+# its admin, and the roles below get these folder permissions (and Overall/Read).
+apps:
+  jupyterhub: [developer, analyst]
+  airflow: {owner: User, developer: User, analyst: User, writer: Viewer}
+  jenkins:
+    developer: [Job/Read, Job/Build, Job/Cancel, Job/Workspace]
+    analyst: [Job/Read]
+# Airflow DAGs and Jenkins CI (optional): one read-only Git repository. Airflow loads
+# the bundles audit-main (prod_branch) and audit-uat (uat_branch). DAG IDs start with
+# the bundle name (audit-main-<workload>), and those DAGs write as writer_user below.
+# Jenkins builds the repository's Jenkinsfile in folder audit: audit_ci builds the
+# two branches, audit_cd builds branches with an open pull request (github.com only).
+repo:
+   url: https://github.com/cdiogo1979/opensource-lakehouse-audit-dp.git
+   prod_branch: main
+   uat_branch: uat
+# Platform sources: the StarRocks audit log staging table (every statement of every
+# user, 7 days), which the product's bronze task pulls. Analysts get none, as for the
+# namespaces above: they read only the masked views of the prod MV database.
+platform_sources:
+  starrocks_audit: {owner: read, developer: read, analyst: none, writer: read}
+# Service user for the product's workloads; its password file is written when
+# the user is created (default password ChangeM3!) and never reset afterwards.
+writer_user:
+  username: srv-audit-writer
+  password_file: .runtime/credentials/srv-audit-writer-password
