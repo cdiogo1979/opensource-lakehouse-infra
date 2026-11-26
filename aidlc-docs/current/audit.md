@@ -147,3 +147,33 @@ The complete audit history through intent `20261113-airflow-python-packages` is 
 **Email**: cdiogo@gmail.com
 
 ---
+
+## Build and Test — Jupyter spawn failure (environment)
+**Timestamp**: 2026-11-26T08:30:00Z
+**User Input**: "i am getting error when i try to login with developer to jupyterhub" / "Prune build cache (Recommended)"
+**AI Response**: "Hub log: the spawn failed with ImageNotFound for local/lakehouse-jupyter-singleuser:6.1.1-spark (sign-in itself worked). The image, rebuilt 40 minutes earlier, had been deleted by Rancher Desktop's Kubernetes image cleanup: the VM disk was 81% full (75.4 of 97.9 GB), mostly Docker build cache (49.9 GB, 44.1 GB reclaimable); images without a running container are removed first. Rebuilt the image from cache; with the user's approval ran docker builder prune -f (37.9 GB freed; disk 35%, 60.7 GB free); all 8 lakehouse images present. Not caused by this intent's code; it is the documented 'Unused images may be deleted' limitation, made more likely by this session's image builds."
+**Context**: CONSTRUCTION - Build and Test; live check 10 (Jupyter) pending the user's retry.
+**User**: cdiogo1979
+**Email**: cdiogo@gmail.com
+
+---
+
+## Build and Test — Jupyter CA missing
+**Timestamp**: 2026-11-26T08:40:00Z
+**User Input**: "getting this erroor StarRocksConnectionError: LAKEHOUSE_STARROCKS_CA does not name the StarRocks CA certificate."
+**AI Response**: "The user's server had no StarRocks CA mount and no LAKEHOUSE_STARROCKS_* variables: the Hub image bakes jupyterhub_config.py, lakehouse_spawner.py and lakehouse_policy.py (Dockerfile COPY), and the Hub had only been recreated, not rebuilt. Rebuilt the Hub image (compose build jupyterhub), recreated it (healthy; the new code is present). The user must stop and restart their server. build-instructions.md corrected; the deploy handoff will list the Hub rebuild. The helper's error was the intended clear message (no secret)."
+**Context**: CONSTRUCTION - Build and Test; live check 10 pending.
+**User**: cdiogo1979
+**Email**: cdiogo@gmail.com
+
+---
+
+## Build and Test — Jupyter login used the Keycloak ID
+**Timestamp**: 2026-11-26T08:55:00Z
+**User Input**: "it prompts for password" / "OperationalError: (1045, \"Access denied for user 'a36abc37-2649-4e83-9bc8-35a5ea04543d' (using password: YES)\")"
+**AI Response**: "The prompt confirmed the CA and settings reached the server. The login used JUPYTERHUB_USER, which is the Keycloak ID (the Hub's username_claim is sub), while StarRocks users are named after the Keycloak username. Fix: lakehouse_policy.starrocks_username (validated preferred_username from the sign-in state); the spawner sets LAKEHOUSE_STARROCKS_USER in user servers; the helper uses LAKEHOUSE_STARROCKS_USER in Jupyter mode and never JUPYTERHUB_USER. AC-18 and AC-22 corrected; tests added; host suite 730 passed. Rebuilt the Hub, Jupyter single-user and Spark runtime images; Hub recreated. The user must restart their server again."
+**Context**: CONSTRUCTION - Build and Test; live check 10 pending.
+**User**: cdiogo1979
+**Email**: cdiogo@gmail.com
+
+---

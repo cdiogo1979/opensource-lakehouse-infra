@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+import re
 import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -60,6 +61,19 @@ def checkpoint_buckets(groups: object, products=None) -> tuple[str, ...]:
         for product in products
         if any(product.group(role) in member for role in CHECKPOINT_ROLES)
     ))
+
+
+STARROCKS_USERNAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
+
+
+def starrocks_username(oauth_user) -> str | None:
+    """The user's StarRocks user name: the Keycloak ``preferred_username`` (AC-18).
+
+    JupyterHub names users by their Keycloak ID (``sub``); StarRocks users are named
+    after the Keycloak username, as the reconciler creates them. Malformed values give none.
+    """
+    name = oauth_user.get("preferred_username") if isinstance(oauth_user, dict) else None
+    return name if isinstance(name, str) and STARROCKS_USERNAME.fullmatch(name) else None
 
 
 def starrocks_ca_volume(host_path: str, hub_copy: Path) -> dict:

@@ -72,7 +72,15 @@ def test_p2_selected_buckets_are_dev_buckets_of_owner_or_developer_products_only
 
 # --- StarRocks CA for lakehouse_starrocks.connect() (AC-22) ------------------------------
 
-from infra.jupyter.hub.lakehouse_policy import starrocks_ca_volume  # noqa: E402
+from infra.jupyter.hub.lakehouse_policy import starrocks_ca_volume, starrocks_username  # noqa: E402
+
+
+def test_the_starrocks_user_is_the_keycloak_username_not_the_hub_id():
+    assert starrocks_username({"sub": "a36abc37-2649-4e83-9bc8-35a5ea04543d", "preferred_username": "joe-developer"}) == "joe-developer"
+    for claims in ({}, {"preferred_username": ""}, {"preferred_username": "Joe"}, {"preferred_username": "x'@'%"}, {"preferred_username": 3}, None, "joe"):
+        assert starrocks_username(claims) is None
+    spawner = (ROOT / "infra/jupyter/hub/lakehouse_spawner.py").read_text()
+    assert 'environment["LAKEHOUSE_STARROCKS_USER"] = username' in spawner
 
 
 def test_the_starrocks_ca_is_mounted_read_only_when_the_hub_has_it(tmp_path):

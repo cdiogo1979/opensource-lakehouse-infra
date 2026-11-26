@@ -6,8 +6,9 @@ verified with the StarRocks CA:
 - **Airflow run** (``LAKEHOUSE_TOKEN_PROVIDER=airflow``): as the product's writer
   (``LAKEHOUSE_STARROCKS_USER``), logged in with the run's Keycloak access token, renewed
   through the run's token broker when it is close to expiry.
-- **Jupyter** (``JUPYTERHUB_USER``): as the signed-in user, with their StarRocks (LDAP)
-  password, asked with ``getpass`` every time; it is never stored.
+- **Jupyter** (``JUPYTERHUB_USER``): as the signed-in user (``LAKEHOUSE_STARROCKS_USER``, their
+  Keycloak username, set by the Hub), with their StarRocks (LDAP) password, asked with
+  ``getpass`` every time; it is never stored.
 
 The platform sets the host, port and CA (``LAKEHOUSE_STARROCKS_HOST``, ``_PORT``, ``_CA``);
 product repositories never configure them. No token, capability or password is printed,
@@ -62,7 +63,8 @@ def connection_settings(environ: Mapping[str, str] | None = None) -> Settings:
     if environ.get("LAKEHOUSE_TOKEN_PROVIDER") == "airflow":
         mode, user, user_variable = "airflow", environ.get("LAKEHOUSE_STARROCKS_USER", ""), "LAKEHOUSE_STARROCKS_USER"
     elif environ.get("JUPYTERHUB_USER"):
-        mode, user, user_variable = "jupyter", environ.get("JUPYTERHUB_USER", ""), "JUPYTERHUB_USER"
+        # The Hub sets the Keycloak username; JUPYTERHUB_USER is the Keycloak ID, never a StarRocks user.
+        mode, user, user_variable = "jupyter", environ.get("LAKEHOUSE_STARROCKS_USER", ""), "LAKEHOUSE_STARROCKS_USER"
     else:
         raise StarRocksConnectionError("lakehouse_starrocks.connect() works in an Airflow run or a JupyterHub server.")
     host = environ.get("LAKEHOUSE_STARROCKS_HOST") or DEFAULT_HOST

@@ -40,8 +40,12 @@ def airflow_env(ca, **extra):
 
 def test_airflow_and_jupyter_settings(ca):
     assert ls.connection_settings(airflow_env(ca)) == ls.Settings("airflow", "starrocks-fe", 9030, ca, "srv-audit-writer")
-    jupyter = {"JUPYTERHUB_USER": "maria-owner", "LAKEHOUSE_STARROCKS_CA": ca, "LAKEHOUSE_STARROCKS_HOST": "fe", "LAKEHOUSE_STARROCKS_PORT": "9031"}
+    jupyter = {"JUPYTERHUB_USER": "a36abc37-2649-4e83-9bc8-35a5ea04543d", "LAKEHOUSE_STARROCKS_USER": "maria-owner", "LAKEHOUSE_STARROCKS_CA": ca,
+               "LAKEHOUSE_STARROCKS_HOST": "fe", "LAKEHOUSE_STARROCKS_PORT": "9031"}
     assert ls.connection_settings(jupyter) == ls.Settings("jupyter", "fe", 9031, ca, "maria-owner")
+    # Never the Hub's user name (the Keycloak ID): without the Hub's username, connect() refuses.
+    with pytest.raises(ls.StarRocksConnectionError, match="LAKEHOUSE_STARROCKS_USER"):
+        ls.connection_settings({k: v for k, v in jupyter.items() if k != "LAKEHOUSE_STARROCKS_USER"})
 
 
 @pytest.mark.parametrize(
@@ -130,7 +134,7 @@ def test_airflow_login_uses_the_token_and_the_oidc_client_over_verified_tls(ca, 
 def test_jupyter_login_asks_the_password_every_time_and_keeps_nothing(ca, monkeypatch):
     calls = fake_pymysql(monkeypatch)
     prompts = []
-    environ = {"JUPYTERHUB_USER": "maria-owner", "LAKEHOUSE_STARROCKS_CA": ca}
+    environ = {"JUPYTERHUB_USER": "a36abc37-2649-4e83-9bc8-35a5ea04543d", "LAKEHOUSE_STARROCKS_USER": "maria-owner", "LAKEHOUSE_STARROCKS_CA": ca}
     for _ in range(2):
         ls.connect(environ=environ, password_prompt=lambda text: prompts.append(text) or SECRET)
     assert prompts == ["StarRocks password for maria-owner: "] * 2

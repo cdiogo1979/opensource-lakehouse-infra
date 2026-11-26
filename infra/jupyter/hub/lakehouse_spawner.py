@@ -11,6 +11,7 @@ from lakehouse_policy import (
     eligible_group_names,
     persistent_home_volume,
     starrocks_ca_volume,
+    starrocks_username,
 )
 
 # The staged checkpoint keys, mounted read-only into the Hub for these checks.
@@ -56,6 +57,12 @@ class LakehouseDockerSpawner(DockerSpawner):
         }
         # The StarRocks CA (optional: absent when StarRocks is off; connect() then says so).
         volumes.update(starrocks_ca_volume(spawner.starrocks_ca_host_path, STARROCKS_CA))
+        # StarRocks names the user by the Keycloak username, not JupyterHub's Keycloak ID.
+        environment = {key: value for key, value in dict(spawner.environment or {}).items() if key != "LAKEHOUSE_STARROCKS_USER"}
+        username = starrocks_username(oauth_user)
+        if username:
+            environment["LAKEHOUSE_STARROCKS_USER"] = username
+        spawner.environment = environment
         # The dev checkpoint keys of the user's owner and developer products (never uat or prod).
         volumes.update(checkpoint_key_volumes(
             checkpoint_buckets(oauth_user.get("groups")), spawner.checkpoint_keys_host_dir, CHECKPOINT_KEYS_DIR))
