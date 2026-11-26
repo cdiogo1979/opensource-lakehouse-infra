@@ -86,7 +86,7 @@ def test_lakehouse_builds_the_file_list_from_flags():
 
 
 def test_module_combinations_render(tmp_path):
-    env = {"JUPYTERHUB_BROKER_CA_HOST_PATH": "x", "LAKEHOUSE_BROKER_CA_HOST_PATH": "x", "LAKEHOUSE_BUNDLE_HOST_ROOT": "/x",
+    env = {"JUPYTERHUB_BROKER_CA_HOST_PATH": "x", "LAKEHOUSE_BROKER_CA_HOST_PATH": "x", "LAKEHOUSE_STARROCKS_CA_HOST_PATH": "/x/starrocks-ca.crt", "LAKEHOUSE_BUNDLE_HOST_ROOT": "/x",
            "LAKEHOUSE_BUNDLE_CONTAINER_ROOT": "/opt/airflow/dag_bundles", "LAKEHOUSE_BUNDLE_CONFIG_LIST": "x", "AIRFLOW_UID": "50000",
            "DOCKER_GID": "0", "LAKEHOUSE_CHECKPOINT_KEYS_HOST_DIR": "/x/checkpoint-keys"}
     env = {**os.environ, **env}

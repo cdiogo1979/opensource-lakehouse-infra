@@ -30,12 +30,14 @@ def test_networks_volumes_and_limits():
 def test_no_secrets_in_compose_or_config():
     body = "\n".join(line for line in COMPOSE.splitlines() if not line.lstrip().startswith("#"))
     assert "secrets:" not in body and "environment:" not in body
-    # Only the TLS keystore, its password file, and the LDAP CA are mounted from the runtime, read-only.
+    # Only the TLS keystore, its password file, the LDAP CA, and the built AuditLoader package
+    # (its plugin.conf holds the loader password) are mounted from the runtime, read-only.
     runtime_mounts = [line.strip() for line in body.splitlines() if ".runtime/" in line]
     assert runtime_mounts == [
         "- ./.runtime/container-mounts/starrocks-fe-keystore.p12:/run/secrets/starrocks_fe_keystore.p12:ro",
         "- ./.runtime/container-mounts/starrocks-keystore-password:/run/secrets/starrocks_keystore_password:ro",
         "- ./.runtime/container-mounts/ldap-ca.crt:/run/certs/ldap-ca.crt:ro",
+        "- ./.runtime/starrocks-audit:/opt/lakehouse/starrocks-audit:ro",
     ]
     for name in ("fe.conf", "be.conf"):
         text = (ROOT / "infra/starrocks/conf" / name).read_text()
@@ -81,3 +83,10 @@ def test_password_login_replaces_the_token_helper():
     docs = (ROOT / "README.md").read_text() + "".join(page.read_text() for page in sorted((ROOT / "docs").rglob("*.md")))
     assert "DBeaver and other JDBC clients" in (ROOT / "docs/reference/starrocks.md").read_text()
     assert "starrocks-token.sh" not in docs and "idTokenFile" not in docs
+
+def test_audit_capture_mounts_and_login_events():
+    """AC-8 to AC-10: the plugin folder survives a recreated FE; login events are logged."""
+    assert "starrocks-fe-plugins:/opt/starrocks/fe/plugins" in COMPOSE
+    assert re.search(r"^volumes:\n(  \S+:\n)*  starrocks-fe-plugins:\n", COMPOSE, re.M)
+    fe_conf = (ROOT / "infra/starrocks/conf/fe.conf").read_text(encoding="utf-8")
+    assert re.search(r"^audit_log_modules = slow_query,query,connection$", fe_conf, re.M)

@@ -18,7 +18,7 @@ import re
 import tempfile
 import time
 import urllib.parse
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Iterator
 
@@ -88,7 +88,11 @@ TOP_LEVEL_KEYS = (
     "writer_user",
 )
 ENVIRONMENT_KEYS = ("catalog", "namespace", "bucket", "mv_database")
-OPTIONAL_TOP_LEVEL_KEYS = ("repo",)
+OPTIONAL_TOP_LEVEL_KEYS = ("repo", "platform_sources")
+# Platform-wide data a product may be granted to read (AC-13): the StarRocks audit log
+# staging table, meant for the audit product.
+PLATFORM_SOURCES = ("starrocks_audit",)
+PLATFORM_SOURCE_LEVELS = ("none", "read")
 REPO_KEYS = ("url", "prod_branch", "uat_branch")
 # Airflow Git bundles: <name>-main (prod branch) and <name>-uat (UAT branch).
 BUNDLE_ENVIRONMENTS = (("main", "prod_branch"), ("uat", "uat_branch"))
@@ -144,6 +148,11 @@ class Product:
     writer_user: WriterUser
     path: Path | None = None
     repo: Repo | None = None
+    # source -> role -> level; empty when the file declares none (AC-14).
+    platform_sources: dict[str, dict[str, str]] = field(default_factory=dict)
+
+    def platform_source_level(self, source: str, role: str) -> str:
+        return self.platform_sources.get(source, {}).get(role, "none")
 
     def environment(self, key: str) -> Environment:
         return next(env for env in self.environments if env.key == key)
@@ -236,6 +245,21 @@ def _levels(value: object, where: str, allowed: tuple[str, ...]) -> dict[str, di
     return result
 
 
+def _platform_sources(value: object, where: str) -> dict[str, dict[str, str]]:
+    """The optional ``platform_sources`` block (AC-13): known sources, every role, ``none`` or ``read``."""
+    sources = _mapping(value, where, PLATFORM_SOURCES, exact=False)
+    result: dict[str, dict[str, str]] = {}
+    for name in PLATFORM_SOURCES:
+        if name not in sources:
+            continue
+        row = _mapping(sources[name], f"{where}.{name}", ROLES)
+        for role in ROLES:
+            if row[role] not in PLATFORM_SOURCE_LEVELS:
+                raise ProductError(f"{where}.{name}.{role} must be one of {', '.join(PLATFORM_SOURCE_LEVELS)}.")
+        result[name] = {role: row[role] for role in ROLES}
+    return result
+
+
 def parse_product(data: object, source: str = "<product>") -> Product:
     """Validate one product document (BR-1.1, BR-1.5) and return the model."""
     document = _mapping(data, source, TOP_LEVEL_KEYS + OPTIONAL_TOP_LEVEL_KEYS, exact=False)
@@ -324,6 +348,7 @@ def parse_product(data: object, source: str = "<product>") -> Product:
         jenkins={role: jenkins[role] for role in JENKINS_ROLES if role in jenkins},
         writer_user=WriterUser(username, password_file),
         repo=_repo(document.get("repo"), f"{source}.repo") if "repo" in document else None,
+        platform_sources=_platform_sources(document["platform_sources"], f"{source}.platform_sources") if "platform_sources" in document else {},
     )
 
 

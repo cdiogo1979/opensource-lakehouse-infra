@@ -274,6 +274,27 @@ def test_create_cluster_mounts_the_bundle_read_only_and_passes_only_run_scoped_v
     assert keys == {"/host/runtime/checkpoint-keys/bucket-default-uat": {"bind": "/run/secrets/lakehouse-checkpoints/bucket-default-uat", "mode": "ro"}}
 
 
+def test_run_containers_get_the_starrocks_ca_and_settings_for_lakehouse_starrocks(monkeypatch):
+    container = FakeContainer()
+    fake = FakeDocker(container)
+    monkeypatch.setattr(factory.docker, "DockerClient", lambda base_url: fake)
+    monkeypatch.setattr(factory, "_read_broker_control_token", lambda: "t" * 40)
+    monkeypatch.setattr(factory, "_broker_request", lambda *a: {"run_handle": "h", "renewal_capability": "cap", "access_token": "tok"})
+    monkeypatch.setattr(factory, "_product_writer", lambda product: f"srv-{product}-writer")
+    factory._create_spark_container(
+        image="img", network="net", data_network="data", docker_url="unix://x", bundle_source="/opt/airflow/dag_bundles/default-uat/versions/abc",
+        environment="uat", product="default", aws_region="us-east-1", broker_ca_host_path="/ca", broker_ca_container_path="/run/ca",
+        starrocks_ca_host_path="/host/.runtime/container-mounts/starrocks-ca.crt", **context())
+    assert fake.created["volumes"]["/host/.runtime/container-mounts/starrocks-ca.crt"] == {"bind": "/run/certs/starrocks-ca.crt", "mode": "ro"}
+    environment = fake.created["environment"]
+    assert {k: v for k, v in environment.items() if k.startswith("LAKEHOUSE_STARROCKS_")} == {
+        "LAKEHOUSE_STARROCKS_HOST": "starrocks-fe", "LAKEHOUSE_STARROCKS_PORT": "9030",
+        "LAKEHOUSE_STARROCKS_CA": "/run/certs/starrocks-ca.crt", "LAKEHOUSE_STARROCKS_USER": "srv-default-writer"}
+    monkeypatch.setenv("STARROCKS_ENABLED", "false")
+    assert factory._starrocks_environment("default", "/host/.runtime/container-mounts/starrocks-ca.crt") == {}
+    assert factory._starrocks_environment("default", "") == {}
+
+
 def test_each_run_mounts_exactly_its_own_environment_key():
     for environment, bucket in (("prod", "bucket-default"), ("uat", "bucket-default-uat")):
         assert factory._checkpoint_key_volume("default", environment) == {

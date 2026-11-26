@@ -62,7 +62,7 @@ RUN apt-mark manual netbase >/dev/null \
       -o -name 'spark-yarn_*.jar' -o -name 'hadoop-yarn-server-web-proxy-*.jar' -o -name 'spark-mesos_*.jar' -o -name 'mesos-*.jar' \) -delete \
  && ! dpkg -s linux-libc-dev gcc >/dev/null 2>&1 \
  && /usr/bin/python3 --version && java -version 2>&1 | head -1 && /opt/spark/bin/spark-submit --version 2>&1 | grep -m1 -o "version 3\.5\.[0-9]*"
-RUN env PYTHONPATH=/opt/lakehouse-bundle /opt/lakehouse/venv/bin/python -c "import lakehouse_spark, lakehouse_broker_client"
+RUN env PYTHONPATH=/opt/lakehouse-bundle /opt/lakehouse/venv/bin/python -c "import lakehouse_spark, lakehouse_broker_client, lakehouse_starrocks, pymysql"
 ENV PYSPARK_PYTHON=/opt/lakehouse/venv/bin/python \
     PYSPARK_DRIVER_PYTHON=/opt/lakehouse/venv/bin/python \
     PATH=/opt/lakehouse/venv/bin:${PATH}

@@ -63,6 +63,19 @@ repo:                      # optional: the product's DAG and CI repository (read
 
 **The `repo` block** (optional) gives the product its own Airflow DAG bundles: `<name>-main` tracks `prod_branch` and `<name>-uat` tracks `uat_branch`. The URL must be credential-free `https`; the repository is read without credentials. Several products may share one repository. `default` uses `opensource-lakehouse-sample-dp` (`main` and `uat`). There is no writer field: runs from a product's bundles always write as that product's `writer_user` (see [Airflow](airflow.md)). The same block gives the product its Jenkins jobs `<name>_ci` and `<name>_cd` (see [Jenkins](jenkins.md)).
 
+## Platform sources
+
+The optional `platform_sources` block grants a product's roles read access to platform-wide data. The only source today is `starrocks_audit`, the StarRocks audit log staging table ([StarRocks — audit capture](starrocks.md#audit-capture)); it holds every statement of every user, so it is meant for the audit data product only.
+
+```yaml
+platform_sources:
+  starrocks_audit: {owner: read, developer: read, analyst: none, writer: read}
+```
+
+- Every role must be listed, with `none` or `read`; an unknown source, role or level fails validation. Without the block, every role has `none`.
+- `read` is `SELECT` on `starrocks_audit_db__.starrocks_audit_tbl__` for that role in StarRocks, kept by the StarRocks bootstrap like the other grants and revoked when the block or the level is removed.
+- `data-products/audit.yaml` declares it for owners, developers and the writer.
+
 ## Access levels
 
 | Level | Polaris (on the product namespace) | StarRocks (on the product database) | RustFS (on the product bucket) |

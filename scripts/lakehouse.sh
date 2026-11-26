@@ -76,6 +76,10 @@ show_status() {
   # The scheduled sync (optional profile): unhealthy means no cycle succeeded lately.
   state="$(docker inspect --format '{{.State.Status}}{{if .State.Health}} ({{.State.Health.Status}}){{end}}' lakehouse-local-polaris-group-reconciler-1 2>/dev/null || true)"
   if [[ -n "$state" ]]; then printf '%-16s %s\n' "reconciler" "$state"; fi
+  # StarRocks audit capture (AuditLoader plugin and staging table); silent when StarRocks is off or down.
+  if [[ "$STARROCKS_ENABLED" == true && "$(service_state starrocks-fe)" == healthy ]]; then
+    python3 infra/starrocks/audit_capture.py --status 2>/dev/null || true
+  fi
 }
 
 wait_for_services() {
@@ -125,6 +129,9 @@ start_stack() {
   wait_for_services keycloak polaris
   python3 infra/keycloak/bootstrap-realm.py
   if [[ "$JUPYTER_ENABLED" == true ]]; then
+    # The Hub mounts the StarRocks CA (for user servers): create it first, or Docker would
+    # create a directory in its place. The script only creates or checks the files.
+    python3 scripts/setup/prepare-starrocks-certificates.py
     "${COMPOSE[@]}" up -d jupyterhub
     wait_for_services jupyterhub
   else
@@ -139,6 +146,8 @@ start_stack() {
   fi
   if [[ "$STARROCKS_ENABLED" == true ]]; then
     python3 scripts/setup/prepare-starrocks-certificates.py
+    # The FE mounts the built AuditLoader package from here (audit_capture.py fills it).
+    mkdir -p .runtime/starrocks-audit && chmod 700 .runtime/starrocks-audit
     "${COMPOSE[@]}" up -d "${STARROCKS_SERVICES[@]}"
     wait_for_services "${STARROCKS_SERVICES[@]}"
     python3 infra/starrocks/bootstrap-starrocks.py --runtime-only
@@ -171,11 +180,12 @@ prepare_airflow_environment() {
   LAKEHOUSE_BUNDLE_HOST_ROOT="${LAKEHOUSE_BUNDLE_HOST_ROOT:-${ROOT_DIR}/.runtime/airflow-dag-bundles}"
   LAKEHOUSE_BUNDLE_CONTAINER_ROOT="${LAKEHOUSE_BUNDLE_CONTAINER_ROOT:-/opt/airflow/dag_bundles}"
   LAKEHOUSE_BROKER_CA_HOST_PATH="${LAKEHOUSE_BROKER_CA_HOST_PATH:-${ROOT_DIR}/.runtime/container-mounts/airflow-token-broker-ca.crt}"
+  LAKEHOUSE_STARROCKS_CA_HOST_PATH="${LAKEHOUSE_STARROCKS_CA_HOST_PATH:-${ROOT_DIR}/.runtime/container-mounts/starrocks-ca.crt}"
   LAKEHOUSE_CHECKPOINT_KEYS_HOST_DIR="${ROOT_DIR}/.runtime/container-mounts/checkpoint-keys"
   LAKEHOUSE_BUNDLE_CONFIG_LIST="$(python3 scripts/setup/airflow-bundle-config.py)"
   AIRFLOW_HOST_PORT="${AIRFLOW_HOST_PORT:-8085}"
   export AIRFLOW_UID DOCKER_GID LAKEHOUSE_BUNDLE_HOST_ROOT
-  export LAKEHOUSE_BUNDLE_CONTAINER_ROOT LAKEHOUSE_BROKER_CA_HOST_PATH LAKEHOUSE_CHECKPOINT_KEYS_HOST_DIR LAKEHOUSE_BUNDLE_CONFIG_LIST AIRFLOW_HOST_PORT
+  export LAKEHOUSE_BUNDLE_CONTAINER_ROOT LAKEHOUSE_BROKER_CA_HOST_PATH LAKEHOUSE_STARROCKS_CA_HOST_PATH LAKEHOUSE_CHECKPOINT_KEYS_HOST_DIR LAKEHOUSE_BUNDLE_CONFIG_LIST AIRFLOW_HOST_PORT
 }
 
 airflow_service_state() {

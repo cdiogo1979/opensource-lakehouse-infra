@@ -57,6 +57,9 @@ The reset deletes all local platform state, so the next start begins from nothin
   - **The LDAP admin password** (`ldap-admin-password`) is for recovery only.
   - **Certificates**: `python3 scripts/setup/prepare-ldap-certificates.py --rotate`, then restart `ldap`, Keycloak, and the StarRocks FE.
 
+- **StarRocks audit loader password** (`.runtime/credentials/srv-auditloader-password`): delete the file and run `python3 infra/starrocks/audit_capture.py` (or `./scripts/lakehouse.sh start`): it generates a new one, sets it on `srv-auditloader`, and reinstalls the AuditLoader plugin with it.
+- **StarRocks `fe.conf` changes** (for example `audit_log_modules`) take effect when the FE restarts: `docker compose -f compose.core.yml -f compose.starrocks.yml up -d --force-recreate starrocks-fe`, then `./scripts/lakehouse.sh start` (or `python3 infra/starrocks/bootstrap-starrocks.py --runtime-only`); password logins recover within a reconciler cycle, as after any restart.
+
 ## Running bootstrap steps individually
 
 `bootstrap-default-product.sh` runs these in order for every product file; each is idempotent, and the product steps also take `--product FILE` and `--dry-run`:

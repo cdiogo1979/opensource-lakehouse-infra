@@ -10,10 +10,13 @@ from lakehouse_policy import (
     cleanup_partial_server,
     eligible_group_names,
     persistent_home_volume,
+    starrocks_ca_volume,
 )
 
 # The staged checkpoint keys, mounted read-only into the Hub for these checks.
 CHECKPOINT_KEYS_DIR = Path("/run/secrets/checkpoint-keys")
+# The StarRocks CA for lakehouse_starrocks.connect() (AC-22), mounted read-only into the Hub to check it.
+STARROCKS_CA = Path("/run/certs/starrocks-ca.crt")
 
 
 class LakehouseDockerSpawner(DockerSpawner):
@@ -22,6 +25,7 @@ class LakehouseDockerSpawner(DockerSpawner):
     data_access_network_name = Unicode(config=True)
     broker_ca_host_path = Unicode(config=True)
     checkpoint_keys_host_dir = Unicode(config=True)
+    starrocks_ca_host_path = Unicode("", config=True)
 
     @staticmethod
     async def check_current_admission(spawner):
@@ -50,6 +54,8 @@ class LakehouseDockerSpawner(DockerSpawner):
             "bind": "/run/certs/jupyterhub-broker-ca.crt",
             "mode": "ro",
         }
+        # The StarRocks CA (optional: absent when StarRocks is off; connect() then says so).
+        volumes.update(starrocks_ca_volume(spawner.starrocks_ca_host_path, STARROCKS_CA))
         # The dev checkpoint keys of the user's owner and developer products (never uat or prod).
         volumes.update(checkpoint_key_volumes(
             checkpoint_buckets(oauth_user.get("groups")), spawner.checkpoint_keys_host_dir, CHECKPOINT_KEYS_DIR))

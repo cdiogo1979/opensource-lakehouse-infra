@@ -62,6 +62,18 @@ def checkpoint_buckets(groups: object, products=None) -> tuple[str, ...]:
     ))
 
 
+def starrocks_ca_volume(host_path: str, hub_copy: Path) -> dict:
+    """The read-only StarRocks CA mount for a user server (AC-22), or none.
+
+    The CA is optional (StarRocks may be off); without it lakehouse_starrocks.connect() says
+    the CA is missing. ``hub_copy`` is the Hub's own read-only mount of the same file.
+    """
+    host = Path(host_path) if host_path else None
+    if host is None or not host.is_absolute() or host.name != hub_copy.name or hub_copy.is_symlink() or not hub_copy.is_file():
+        return {}
+    return {str(host): {"bind": str(hub_copy), "mode": "ro"}}
+
+
 def checkpoint_key_volumes(buckets, host_dir: str, staged_dir: Path) -> dict[str, dict[str, str]]:
     """Read-only mounts of the staged keys; a missing or unsafe file fails the spawn."""
     host = Path(host_dir)

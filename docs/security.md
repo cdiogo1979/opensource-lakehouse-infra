@@ -73,11 +73,12 @@ Details: [Identity](reference/identity.md).
 - **Where they live**: all secrets are generated into `.runtime/credentials/` (directory `0700`, files `0600`), never printed, never written into Compose files or the repository; containers get read-only copies in `.runtime/container-mounts/`.
 - **No credentials in product repositories**: product repositories are read anonymously, hold no secrets, and CI refuses the patterns that would smuggle code or packages in (`dags/` beyond the stub, `requirements.txt` with URLs or options).
 - **Passwords are never command-line arguments**: the scripts read them from files, the environment, or a prompt without echo.
-- **Rotation**: client secrets, LDAP passwords and certificates, the StarRocks catalog secret, and the checkpoint keys each have a documented rotation ([Operations — secrets](reference/operations.md#secrets-and-rotation)).
+- **The StarRocks audit loader** (`srv-auditloader`) has a generated password that can only insert into the audit staging table; it also sits in the plugin package under `.runtime/starrocks-audit/`, mounted read-only into the FE.
+- **Rotation**: client secrets, LDAP passwords and certificates, the StarRocks catalog secret, the audit loader password, and the checkpoint keys each have a documented rotation ([Operations — secrets](reference/operations.md#secrets-and-rotation)).
 
 ## 7. Supply chain
 
-- **Pinned images and packages**: container base images are pinned by digest; StarRocks, Keycloak, Polaris, RustFS and Jenkins plugins by version; the workload Python environment by a full lock, installed from wheels only, with each image build failing if it differs from the lock; Maven downloads for the Spark image are checksum-verified.
+- **Pinned images and packages**: container base images are pinned by digest; StarRocks, Keycloak, Polaris, RustFS and Jenkins plugins by version; the workload Python environment by a full lock, installed from wheels only, with each image build failing if it differs from the lock; Maven downloads for the Spark image are checksum-verified; the StarRocks AuditLoader plugin is vendored and checked against its locked SHA-256 before every install.
 - **Product extras** are constrained by the platform lock and may never replace a locked version.
 - **Monitoring**: Dependabot alerts cover the repository's manifests, and a weekly and on-push workflow scans every external image and the workload lock with Trivy, submitting language packages to the dependency graph (Dependabot) and all findings, operating-system packages included, to Code scanning ([Vulnerability alerts](reference/vulnerability-alerts.md)).
 

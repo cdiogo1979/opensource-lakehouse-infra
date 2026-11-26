@@ -48,6 +48,12 @@ apps:
 #   url: https://github.com/<owner>/<repository>.git
 #   prod_branch: main
 #   uat_branch: uat
+# Platform sources (optional): platform-wide data this product may read, none or read per
+# role. starrocks_audit is the StarRocks audit log staging table
+# (starrocks_audit_db__.starrocks_audit_tbl__, every statement of every user, 7 days):
+# meant for the audit data product only.
+# platform_sources:
+#   starrocks_audit: {owner: none, developer: none, analyst: none, writer: none}
 # Service user for the product's workloads; its password file is written when
 # the user is created (default password ChangeM3!) and never reset afterwards.
 writer_user:

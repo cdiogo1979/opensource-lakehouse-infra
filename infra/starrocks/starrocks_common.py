@@ -62,6 +62,8 @@ class Model:
     managed_roles: tuple[str, ...]
     scopes: tuple[RoleScope, ...]
     mv_databases: tuple[str, ...]
+    # Roles that read the StarRocks audit log staging table (platform_sources.starrocks_audit: read).
+    audit_readers: tuple[str, ...] = ()
 
 
 PLATFORM_ADMIN_GROUP = data_products.PLATFORM_ADMIN_GROUP
@@ -100,12 +102,19 @@ def build_model(products: list) -> Model:
     for database in mv_databases:
         scopes.append(RoleScope(PLATFORM_ADMIN_ROLE, INTERNAL_CATALOG, None, "none", database, "manage"))
     default = next((product for product in products if product.protected), None)
+    audit_readers = tuple(
+        data_products.starrocks_role(product.groups[role])
+        for product in products
+        for role in data_products.ROLES
+        if product.platform_source_level("starrocks_audit", role) == "read"
+    )
     return Model(
         environments=environments_of(default) if default else (),
         group_roles=group_roles,
         managed_roles=tuple(dict.fromkeys(group_roles.values())),
         scopes=tuple(scopes),
         mv_databases=mv_databases,
+        audit_readers=audit_readers,
     )
 
 

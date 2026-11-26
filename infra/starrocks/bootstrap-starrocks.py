@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Idempotent StarRocks bootstrap: runtime, Iceberg catalogs, roles, and MV databases.
 
---runtime-only (run by `lakehouse.sh start`) sets the root password on a fresh FE
-and registers the BE. A full run (run when a data product is applied) also
+--runtime-only (run by `lakehouse.sh start`) sets the root password on a fresh FE,
+registers the BE, and sets up the audit capture (audit_capture.py: the AuditLoader
+plugin, its staging table and loader user). A full run (run when a data product is applied) also
 creates the three shared Iceberg REST catalogs on Polaris as srv-starrocks, every
 product's materialized-view databases, and the managed roles with exactly the
 grants of the product files: database-scoped per product, catalog-wide for the
@@ -26,6 +27,7 @@ from typing import Literal
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import starrocks_common as sr  # noqa: E402
+import audit_capture  # noqa: E402
 
 BACKEND = ("starrocks-be", 9050)
 CREDENTIAL_KEY = "iceberg.catalog.oauth2.credential"
@@ -42,7 +44,7 @@ class Grant:
     role: str
     privilege: str
     catalog: str
-    object: str  # CATALOG | ALL DATABASES | ALL TABLES IN ALL DATABASES | DATABASE <db> | ALL TABLES IN DATABASE <db> | ALL MATERIALIZED VIEWS IN DATABASE <db>
+    object: str  # CATALOG | ALL DATABASES | ALL TABLES IN ALL DATABASES | DATABASE <db> | ALL TABLES IN DATABASE <db> | ALL MATERIALIZED VIEWS IN DATABASE <db> | TABLE <db>.<table>
 
 
 @dataclass
@@ -149,8 +151,15 @@ def _mv_grants(role: str, database: str, level: str) -> set[Grant]:
     return grants
 
 
+def _audit_grants(role: str) -> set[Grant]:
+    """AC-15: SELECT on the StarRocks audit log staging table for a role whose product reads it."""
+    return {Grant(role, "SELECT", sr.INTERNAL_CATALOG, f"TABLE {audit_capture.QUALIFIED_TABLE}")}
+
+
 def role_grants(model: sr.Model | None = None) -> set[Grant]:
     grants: set[Grant] = set()
+    for role in (model or sr.MODEL).audit_readers:
+        grants |= _audit_grants(role)
     for scope in (model or sr.MODEL).scopes:
         grants |= _catalog_grants(scope.role, scope.catalog, scope.level, scope.database)
         if scope.mv_database:
@@ -204,6 +213,8 @@ def parse_role_grants(role: str, rows: list[dict[str, str]]) -> tuple[set[Grant]
             obj = "ALL MATERIALIZED VIEWS IN DATABASE " + _bare(obj[len("ALL MATERIALIZED VIEWS IN DATABASE "):])
         elif upper.startswith("DATABASE "):
             obj = "DATABASE " + _bare(obj[len("DATABASE "):])
+        elif upper.startswith("TABLE "):
+            obj = "TABLE " + ".".join(_bare(part) for part in obj[len("TABLE "):].split("."))
         else:
             unknown.append(statement)
             continue
@@ -218,6 +229,8 @@ def render_grant(grant: Grant, revoke: bool = False) -> str:
     if grant.object == "CATALOG":
         return f"{verb} {grant.privilege} ON CATALOG {sr.quote_identifier(grant.catalog)} {preposition} ROLE {role};"
     obj = grant.object
+    if obj.startswith("TABLE "):
+        obj = "TABLE " + ".".join(sr.quote_identifier(part) for part in obj[len("TABLE "):].split("."))
     for prefix in ("ALL MATERIALIZED VIEWS IN DATABASE ", "ALL TABLES IN DATABASE ", "DATABASE "):
         if obj.startswith(prefix):
             obj = prefix + sr.quote_identifier(obj[len(prefix):])
@@ -399,7 +412,7 @@ def smoke_check(runner: sr.SqlRunner) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--runtime-only", action="store_true", help="only set the root password and register the BE")
+    parser.add_argument("--runtime-only", action="store_true", help="only set the root password, register the BE, and set up the audit capture")
     parser.add_argument("--recreate-catalogs", action="store_true", help="drop and recreate the three catalogs (secret rotation or repair)")
     parser.add_argument("--dry-run", action="store_true", help="read state and print the plan without changing StarRocks")
     parser.add_argument("--skip-smoke", action="store_true", help="skip reading the Polaris smoke tables")
@@ -431,6 +444,15 @@ def main(argv: list[str] | None = None) -> int:
             runner = sr.root_runner(args.transport, args.root_password_file)
             print(f"StarRocks backend: {ensure_backend(runner, timeout)}.")
             print(f"StarRocks LDAP password login: {ensure_ldap_login(runner)}.")
+        if not (args.remove or args.inventory):
+            # AC-12: after the root password, the BE and LDAP login; before the role grants.
+            # A capture failure is reported, not fatal: StarRocks and the rest of `start` keep running,
+            # nothing is installed from an unverified package, and `status` shows the problem.
+            try:
+                report = audit_capture.ensure_audit_capture(runner, dry_run=args.dry_run)
+                print("StarRocks audit capture: " + ", ".join(f"{key} {value}" for key, value in sorted(report.items())) + ".")
+            except sr.StarRocksError as error:
+                print(f"ERROR: StarRocks audit capture not set up: {error}", file=sys.stderr)
         if args.runtime_only:
             return 0
         if args.inventory:
