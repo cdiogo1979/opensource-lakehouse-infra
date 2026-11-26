@@ -11,4 +11,4 @@
 | 7 | Read grants | full bootstrap; `SHOW GRANTS FOR ROLE` | PASS: SELECT on the staging table for role_audit_owner, _developer, _writer only; recognised as current on the next run |
 | 8 | Writer token login from a Spark run | `audit-uat-starrocks_audit` (scheduled 07:20 and manual) | PASS: bronze pulled 704 rows as srv-audit-writer over TLS; silver 704 events, 0 unparsed |
 | 9 | Consumer end to end | uat silver and views | PASS: 728 events = 728 distinct keys; 0 unredacted; five views active, last refresh SUCCESS |
-| 10 | Jupyter password login | `lakehouse_starrocks.connect()` in a Jupyter server as an audit developer | **Pending: needs the user's password** (recreate JupyterHub first) |
+| 10 | Jupyter password login | `lakehouse_starrocks.connect()` in a Jupyter server as an audit developer (after rebuilding the Hub image and restarting the server) | PASS (2026-11-26, run by the user): prompted for the password, logged in as the Keycloak username, read the staging table. Found and fixed on the way: the Hub image needed a rebuild; the login first used the Hub's Keycloak ID instead of the username |
